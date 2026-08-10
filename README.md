@@ -136,8 +136,18 @@ against a straight line.
 
 ![Size comparison](gallery/sun-comparison.png)
 
-*Sagittarius A* and the Sun, same distance from the camera. The Sun is the dot
-on the right.*
+*Sagittarius A\* and the Sun, at the same distance from the camera, so this is
+their true relative size: the shadow is 47× wider. The disc is switched off here
+so the shadow is silhouetted against the lensed star field instead; the ring
+outlining it is the Einstein ring. Rendered with `--tonemap log --log-decades
+13`, because the Sun's photosphere outshines the background stars by eleven
+orders of magnitude and no single linear exposure can hold both.*
+
+![Size comparison with the disc](gallery/sun-with-disc.png)
+
+*The same comparison with the accretion disc on. The disc is much larger than
+the shadow, so the frame has to be wider and the Sun shrinks to a few pixels on
+the right — still at its true relative size.*
 
 The program prints the numbers too:
 
@@ -280,6 +290,7 @@ IMAGE
   --tonemap NAME       aces | reinhard | log | linear
   --glare X            veiling-glare strength in [0,1]
   --log-decades N      decades of radiance the "log" curve spans
+
   --out FILE           output file (.png or .ppm)
 
 OTHER
@@ -302,6 +313,12 @@ Some things worth trying:
 # look down the spin axis
 ./blackhole --preset sgra --inclination 5
 ```
+
+A note on `--glare`: it is a camera model, a convolution with a heavy-tailed
+point spread function. Any such kernel is finite, and under a very wide display
+stretch (`--tonemap log` with many decades) the edge of the kernel becomes
+visible as a halo boundary around saturated sources. Use `--glare 0` for
+wide-latitude renders.
 
 Output is PNG, written by a self-contained encoder (CRC-32, Adler-32, and a
 small DEFLATE with LZ77 and fixed Huffman codes) so there is no zlib or libpng

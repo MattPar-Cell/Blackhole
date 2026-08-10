@@ -48,54 +48,60 @@ void add_glare(Image& im, double strength, double radius_px) {
     if (strength <= 0.0 || radius_px <= 0.0) return;
     const int w = im.width, h = im.height;
 
-    // Separable Gaussian, three-pass box approximation (fast and smooth).
-    const int r = std::max(1, static_cast<int>(radius_px));
-    std::vector<spec::XYZ> tmp(im.pixels), buf(im.pixels.size());
+    // Veiling glare: light scattered inside the optics (and inside the eye).
+    // The real point spread function is heavy-tailed - Spencer et al. (1995)
+    // measure roughly theta^-3 for the human eye - so this superposes a narrow
+    // and a wide Gaussian rather than using a single one.
+    //
+    // A caveat worth knowing: any glare model has a finite kernel, and under a
+    // very wide display stretch (--tonemap log with many decades) the edge of
+    // that kernel becomes visible as a halo boundary around saturated sources.
+    // That is a limit of the convolution, not of the physics.  Pass --glare 0
+    // for wide-latitude renders.
+    auto blur = [&](double sigma, std::vector<spec::XYZ>& dst) {
+        const int r = std::max(1, static_cast<int>(std::ceil(3.0 * sigma)));
+        std::vector<double> k(2 * r + 1);
+        double sum = 0.0;
+        for (int i = -r; i <= r; ++i) {
+            k[i + r] = std::exp(-0.5 * (i * i) / (sigma * sigma));
+            sum += k[i + r];
+        }
+        for (double& v : k) v /= sum;
 
-    auto box_h = [&](std::vector<spec::XYZ>& src, std::vector<spec::XYZ>& dst) {
-        for (int y = 0; y < h; ++y) {
-            spec::XYZ acc{};
-            const size_t row = static_cast<size_t>(y) * w;
-            for (int x = -r; x <= r; ++x) {
-                const int cx = std::clamp(x, 0, w - 1);
-                acc.x += src[row + cx].x; acc.y += src[row + cx].y; acc.z += src[row + cx].z;
-            }
-            const double inv = 1.0 / (2 * r + 1);
+        std::vector<spec::XYZ> tmp(im.pixels.size());
+        for (int y = 0; y < h; ++y)
             for (int x = 0; x < w; ++x) {
-                dst[row + x] = {acc.x * inv, acc.y * inv, acc.z * inv};
-                const int add = std::clamp(x + r + 1, 0, w - 1);
-                const int sub = std::clamp(x - r, 0, w - 1);
-                acc.x += src[row + add].x - src[row + sub].x;
-                acc.y += src[row + add].y - src[row + sub].y;
-                acc.z += src[row + add].z - src[row + sub].z;
+                spec::XYZ a{};
+                for (int i = -r; i <= r; ++i) {
+                    const spec::XYZ& s = im.pixels[static_cast<size_t>(y) * w +
+                                                   std::clamp(x + i, 0, w - 1)];
+                    a.x += k[i + r] * s.x; a.y += k[i + r] * s.y; a.z += k[i + r] * s.z;
+                }
+                tmp[static_cast<size_t>(y) * w + x] = a;
             }
-        }
-    };
-    auto box_v = [&](std::vector<spec::XYZ>& src, std::vector<spec::XYZ>& dst) {
-        for (int x = 0; x < w; ++x) {
-            spec::XYZ acc{};
-            for (int y = -r; y <= r; ++y) {
-                const size_t i = static_cast<size_t>(std::clamp(y, 0, h - 1)) * w + x;
-                acc.x += src[i].x; acc.y += src[i].y; acc.z += src[i].z;
+        dst.assign(im.pixels.size(), spec::XYZ{});
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                spec::XYZ a{};
+                for (int i = -r; i <= r; ++i) {
+                    const spec::XYZ& s =
+                        tmp[static_cast<size_t>(std::clamp(y + i, 0, h - 1)) * w + x];
+                    a.x += k[i + r] * s.x; a.y += k[i + r] * s.y; a.z += k[i + r] * s.z;
+                }
+                dst[static_cast<size_t>(y) * w + x] = a;
             }
-            const double inv = 1.0 / (2 * r + 1);
-            for (int y = 0; y < h; ++y) {
-                dst[static_cast<size_t>(y) * w + x] = {acc.x * inv, acc.y * inv, acc.z * inv};
-                const size_t ia = static_cast<size_t>(std::clamp(y + r + 1, 0, h - 1)) * w + x;
-                const size_t is = static_cast<size_t>(std::clamp(y - r, 0, h - 1)) * w + x;
-                acc.x += src[ia].x - src[is].x;
-                acc.y += src[ia].y - src[is].y;
-                acc.z += src[ia].z - src[is].z;
-            }
-        }
     };
 
-    for (int pass = 0; pass < 3; ++pass) { box_h(tmp, buf); box_v(buf, tmp); }
+    std::vector<spec::XYZ> near_psf, far_psf;
+    blur(radius_px, near_psf);
+    blur(radius_px * 3.0, far_psf);
 
+    const double core = 1.0 - strength;
+    const double a = 0.7 * strength, b = 0.3 * strength;
     for (size_t i = 0; i < im.pixels.size(); ++i) {
-        im.pixels[i].x = im.pixels[i].x * (1.0 - strength) + tmp[i].x * strength;
-        im.pixels[i].y = im.pixels[i].y * (1.0 - strength) + tmp[i].y * strength;
-        im.pixels[i].z = im.pixels[i].z * (1.0 - strength) + tmp[i].z * strength;
+        im.pixels[i].x = im.pixels[i].x * core + near_psf[i].x * a + far_psf[i].x * b;
+        im.pixels[i].y = im.pixels[i].y * core + near_psf[i].y * a + far_psf[i].y * b;
+        im.pixels[i].z = im.pixels[i].z * core + near_psf[i].z * a + far_psf[i].z * b;
     }
 }
 
