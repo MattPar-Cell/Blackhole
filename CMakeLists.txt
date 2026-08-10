@@ -19,7 +19,9 @@ add_executable(blackhole
 target_include_directories(blackhole PRIVATE src)
 
 if(MSVC)
+  # /fp:precise keeps IEEE semantics, which the conservation checks rely on.
   target_compile_options(blackhole PRIVATE /O2 /fp:precise)
+  target_compile_definitions(blackhole PRIVATE _USE_MATH_DEFINES)
 else()
   # -O3 is fine, but -ffast-math is deliberately NOT used: the conservation
   # checks depend on IEEE semantics, and reassociating the geodesic right-hand

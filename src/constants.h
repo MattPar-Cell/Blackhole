@@ -10,6 +10,13 @@
 
 #include <cmath>
 
+// M_PI is a POSIX extension, not standard C++.  MSVC only provides it when
+// _USE_MATH_DEFINES is set before <cmath>, so define it here if it is missing.
+// Every translation unit that uses M_PI includes this header.
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace phys {
 
 // ---- Fundamental constants (SI) --------------------------------------------
