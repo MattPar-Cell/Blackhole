@@ -185,7 +185,7 @@ carried around on a circular Keplerian geodesic. This is not invented for the
 demo: GRAVITY has watched exactly this near Sgr A*, flares tracing loops on the
 sky with 30–70 minute periods.
 
-![Hot spot orbit](gallery/hotspot-orbit.apng)
+![Hot spot orbit](video/hotspot-orbit.apng)
 
 The timing is the interesting part. Each ray already carries the coordinate time
 it took to arrive (negative — it is traced into the past), so the emission time
@@ -199,7 +199,7 @@ is comparable to the orbital period, so the lag is a visible fraction of a cycle
 **Moving the camera in `θ` or `r`** — the two directions that are not symmetry
 directions:
 
-![Inclination sweep](gallery/inclination-sweep.apng)
+![Inclination sweep](video/inclination-sweep.apng)
 
 ```bash
 # 10 seconds, 24 fps, two orbits of a hot spot — self-contained animated PNG
@@ -207,12 +207,12 @@ directions:
     --hotspot 9 --hotspot-size 1.1 --hotspot-contrast 200 \
     --orbits 2 --duration 10 --fps 24 \
     --width 400 --height 300 --spp 1 --no-stars \
-    --out gallery/hotspot-orbit.apng
+    --out video/hotspot-orbit.apng
 
 # face-on to edge-on
 ./blackhole --preset sgra --inclination 4 --inclination-to 89 --fov 34 \
     --duration 10 --fps 24 --width 480 --height 300 --spp 1 --no-stars \
-    --out gallery/inclination-sweep.apng
+    --out video/inclination-sweep.apng
 ```
 
 `.apng` writes a self-contained animated PNG that plays in any browser, using
@@ -434,8 +434,9 @@ dependency. `.ppm` also works.
 
 ```bash
 make            # or: cmake -B build && cmake --build build
-make test
-make images
+make test       # the 40 physics checks
+make images     # regenerate gallery/
+make videos     # regenerate video/  (240 renders each, ~30 min)
 ```
 
 Needs a C++17 compiler and pthreads. Nothing else. `-ffast-math` is
@@ -491,6 +492,8 @@ negligible at every scale in these images. No cosmological expansion.
 | `src/render.cpp` | backwards ray tracing, event detection, shading |
 | `src/image.h/.cpp` | tone mapping, the PNG encoder, and the APNG writer |
 | `src/validate.cpp` | the 40 physics checks |
+| `gallery/` | rendered stills (`make images`) |
+| `video/` | rendered films (`make videos`) |
 
 ## References
 
