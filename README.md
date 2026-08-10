@@ -247,11 +247,23 @@ show. And a pure hot-spot sequence divides the phase by the frame count rather
 than by count − 1, so the last frame does not duplicate the first and the loop
 is seamless; a camera sweep is not periodic and does reach its endpoint exactly.
 
-Cost is the obvious catch: a 10-second film is 240 renders. The settings above
-take roughly 15 minutes each on four cores. Keep `--spp 1` and a small
-`--width` while you find the shot. The two APNGs above are 8 MB and 12 MB —
-every frame is a full keyframe, since APNG has no inter-frame prediction. If
-size matters, write a PNG sequence and let ffmpeg do proper video compression.
+Cost is the obvious catch: a 10-second film is 150–240 renders, roughly 15
+minutes on four cores. Keep `--spp 1` and a small `--width` while you find the
+shot.
+
+On file size: APNG is a still-image format pressed into service, so the encoder
+works to keep it honest. Each frame stores **only the rectangle that changed**
+(`fcTL` sub-frames with `dispose_op = NONE`, `blend_op = SOURCE`) — for the hot
+spot, where a small bright blob moves across a static disc, that is about 7% of
+the canvas per frame. And the DEFLATE stage builds **dynamic Huffman codes**
+from the actual symbol statistics rather than using the fixed tables, which
+lands within a few percent of `zlib -9`. Together those took the two films from
+8 MB and 12 MB down to 1.8 MB and 4.4 MB, with no loss — every composited frame
+is still byte-identical to the corresponding standalone render.
+
+That is about as far as a lossless intraframe format goes. For anything
+size-critical, write a PNG sequence and let ffmpeg apply a real video codec;
+H.264 will beat this by another order of magnitude.
 
 One check worth mentioning, because it validates the whole time pipeline at
 once: the hot-spot film covers exactly two orbits in 240 frames, so the period

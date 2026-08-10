@@ -52,7 +52,7 @@ videos: $(BIN)
 		--width 400 --height 300 --spp 1 --no-stars \
 		--out video/hotspot-orbit.apng
 	./$(BIN) --preset sgra --inclination 4 --inclination-to 89 --fov 34 \
-		--duration 10 --fps 24 --width 480 --height 300 --spp 1 --no-stars \
+		--duration 10 --fps 15 --width 400 --height 250 --spp 1 --no-stars \
 		--out video/inclination-sweep.apng
 
 clean:

@@ -217,14 +217,6 @@ struct BitWriter {
     }
 };
 
-// Fixed Huffman literal/length code (RFC 1951 section 3.2.6).
-inline void emit_literal(BitWriter& w, int sym) {
-    if (sym <= 143)       w.code(0x30 + sym, 8);
-    else if (sym <= 255)  w.code(0x190 + sym - 144, 9);
-    else if (sym <= 279)  w.code(sym - 256, 7);
-    else                  w.code(0xC0 + sym - 280, 8);
-}
-
 const uint16_t kLenBase[29] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
                                35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
 const uint8_t kLenExtra[29] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
@@ -235,18 +227,158 @@ const uint16_t kDistBase[30] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97,
 const uint8_t kDistExtra[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
                                 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
 
-std::vector<uint8_t> deflate_fixed(const std::vector<uint8_t>& data) {
-    BitWriter w;
-    w.bits(1, 1);   // BFINAL
-    w.bits(1, 2);   // BTYPE = 01, fixed Huffman
+// --- Huffman code construction ---------------------------------------------
+//
+// Fixed Huffman codes cost 15-40% more than they need to on this kind of
+// image data, so blocks are emitted with dynamic codes built from the actual
+// symbol frequencies (RFC 1951 section 3.2.7).
 
+// Canonical code lengths for the given frequencies, none longer than max_bits.
+void build_lengths(std::vector<uint32_t> freq, int max_bits, std::vector<uint8_t>& lens) {
+    const size_t n = freq.size();
+    lens.assign(n, 0);
+
+    for (;;) {
+        std::vector<size_t> used;
+        for (size_t i = 0; i < n; ++i) if (freq[i]) used.push_back(i);
+
+        if (used.empty()) return;
+        if (used.size() == 1) {
+            // A one-symbol alphabet cannot form a complete code; give two
+            // symbols a single bit each so the decoder sees a valid tree.
+            lens[used[0]] = 1;
+            lens[used[0] == 0 ? 1 : 0] = 1;
+            return;
+        }
+
+        // Huffman's algorithm.  A heap entry is (weight, id); a negative id
+        // is a leaf standing for symbol -(id+1), a non-negative id indexes the
+        // pool of internal nodes.  Leaves are never pool entries - conflating
+        // the two would give every leaf a phantom child.
+        struct Node { int left, right; };
+        std::vector<Node> pool;
+        pool.reserve(used.size());
+        std::vector<std::pair<uint64_t, int>> heap;
+        heap.reserve(used.size());
+        for (size_t idx : used)
+            heap.push_back({freq[idx], -static_cast<int>(idx) - 1});
+
+        auto cmp = [](const std::pair<uint64_t, int>& a, const std::pair<uint64_t, int>& b) {
+            return a.first != b.first ? a.first > b.first : a.second > b.second;
+        };
+        std::make_heap(heap.begin(), heap.end(), cmp);
+        while (heap.size() > 1) {
+            std::pop_heap(heap.begin(), heap.end(), cmp);
+            const auto a = heap.back(); heap.pop_back();
+            std::pop_heap(heap.begin(), heap.end(), cmp);
+            const auto b = heap.back(); heap.pop_back();
+            pool.push_back({a.second, b.second});
+            heap.push_back({a.first + b.first, static_cast<int>(pool.size()) - 1});
+            std::push_heap(heap.begin(), heap.end(), cmp);
+        }
+
+        // Walk the tree to read off depths.
+        std::fill(lens.begin(), lens.end(), static_cast<uint8_t>(0));
+        int deepest = 0;
+        std::vector<std::pair<int, int>> stack{{heap[0].second, 0}};
+        while (!stack.empty()) {
+            const auto [node, depth] = stack.back();
+            stack.pop_back();
+            if (node < 0) {                       // leaf: encoded as -(symbol+1)
+                const size_t sym = static_cast<size_t>(-node - 1);
+                lens[sym] = static_cast<uint8_t>(std::max(1, depth));
+                deepest = std::max<int>(deepest, lens[sym]);
+            } else {
+                stack.push_back({pool[node].left, depth + 1});
+                stack.push_back({pool[node].right, depth + 1});
+            }
+        }
+        if (deepest <= max_bits) return;
+
+        // Too deep: flatten the distribution and try again.  Costs a little
+        // compression, converges quickly, and cannot loop forever.
+        for (size_t i = 0; i < n; ++i) if (freq[i]) freq[i] = (freq[i] + 1) >> 1;
+    }
+}
+
+// Canonical codes from lengths (RFC 1951 section 3.2.2).
+void build_codes(const std::vector<uint8_t>& lens, std::vector<uint16_t>& codes) {
+    codes.assign(lens.size(), 0);
+    int max_len = 0;
+    for (uint8_t l : lens) max_len = std::max<int>(max_len, l);
+    if (max_len == 0) return;
+    std::vector<uint32_t> count(max_len + 1, 0);
+    for (uint8_t l : lens) if (l) ++count[l];
+    std::vector<uint32_t> next(max_len + 2, 0);
+    uint32_t code = 0;
+    for (int bits = 1; bits <= max_len; ++bits) {
+        code = (code + count[bits - 1]) << 1;
+        next[bits] = code;
+    }
+    for (size_t i = 0; i < lens.size(); ++i)
+        if (lens[i]) codes[i] = static_cast<uint16_t>(next[lens[i]]++);
+}
+
+// Run-length encode a code-length vector with symbols 16/17/18.
+struct ClSym { uint8_t sym; uint8_t extra_bits; uint16_t extra; };
+
+void rle_lengths(const std::vector<uint8_t>& lens, std::vector<ClSym>& out) {
+    const size_t n = lens.size();
+    size_t i = 0;
+    while (i < n) {
+        const uint8_t v = lens[i];
+        size_t run = 1;
+        while (i + run < n && lens[i + run] == v) ++run;
+        if (v == 0) {
+            while (run >= 11) {
+                const uint16_t take = static_cast<uint16_t>(std::min<size_t>(run, 138));
+                out.push_back({18, 7, static_cast<uint16_t>(take - 11)});
+                run -= take; i += take;
+            }
+            while (run >= 3) {
+                const uint16_t take = static_cast<uint16_t>(std::min<size_t>(run, 10));
+                out.push_back({17, 3, static_cast<uint16_t>(take - 3)});
+                run -= take; i += take;
+            }
+            while (run--) { out.push_back({0, 0, 0}); ++i; }
+        } else {
+            out.push_back({v, 0, 0}); ++i; --run;
+            while (run >= 3) {
+                const uint16_t take = static_cast<uint16_t>(std::min<size_t>(run, 6));
+                out.push_back({16, 2, static_cast<uint16_t>(take - 3)});
+                run -= take; i += take;
+            }
+            while (run--) { out.push_back({v, 0, 0}); ++i; }
+        }
+    }
+}
+
+// A single token of the LZ77 stream: either a literal, or a match.
+struct Token {
+    uint16_t sym;        // literal 0-255, or length symbol 257-285
+    uint16_t len_extra;
+    uint8_t  len_bits;
+    uint16_t dist_sym;
+    uint16_t dist_extra;
+    uint8_t  dist_bits;
+    bool     is_match;
+};
+
+// LZ77 with a hash-chain match finder.  Produces the token stream and the two
+// symbol histograms the Huffman stage needs.
+void lz77(const std::vector<uint8_t>& data, std::vector<Token>& tokens,
+          std::vector<uint32_t>& lit_freq, std::vector<uint32_t>& dist_freq) {
     constexpr int kWindow = 32768;
     constexpr int kMinMatch = 3, kMaxMatch = 258;
     constexpr int kHashBits = 15, kHashSize = 1 << kHashBits;
-    constexpr int kMaxChain = 128;
+    constexpr int kMaxChain = 192;
 
+    lit_freq.assign(288, 0);
+    dist_freq.assign(30, 0);
+
+    const size_t n = data.size();
     std::vector<int> head(kHashSize, -1);
-    std::vector<int> prev(data.size(), -1);
+    std::vector<int> prev(n, -1);
 
     auto hash3 = [&](size_t i) -> uint32_t {
         return ((static_cast<uint32_t>(data[i]) << 10) ^
@@ -255,13 +387,11 @@ std::vector<uint8_t> deflate_fixed(const std::vector<uint8_t>& data) {
     };
 
     size_t i = 0;
-    const size_t n = data.size();
     while (i < n) {
         int best_len = 0, best_dist = 0;
         if (i + 2 < n) {
             const uint32_t h = hash3(i);
-            int cand = head[h];
-            int chain = 0;
+            int cand = head[h], chain = 0;
             const size_t max_here = std::min<size_t>(kMaxMatch, n - i);
             while (cand >= 0 && chain++ < kMaxChain) {
                 const size_t dist = i - static_cast<size_t>(cand);
@@ -275,22 +405,26 @@ std::vector<uint8_t> deflate_fixed(const std::vector<uint8_t>& data) {
                 }
                 cand = prev[cand];
             }
-            // Insert current position into the chain.
             prev[i] = head[h];
             head[h] = static_cast<int>(i);
         }
 
+        Token t{};
         if (best_len >= kMinMatch) {
             int lc = 0;
             while (lc < 28 && kLenBase[lc + 1] <= best_len) ++lc;
-            emit_literal(w, 257 + lc);
-            if (kLenExtra[lc]) w.bits(static_cast<uint32_t>(best_len - kLenBase[lc]), kLenExtra[lc]);
             int dc = 0;
             while (dc < 29 && kDistBase[dc + 1] <= best_dist) ++dc;
-            w.code(static_cast<uint32_t>(dc), 5);   // fixed distance codes: 5 bits
-            if (kDistExtra[dc]) w.bits(static_cast<uint32_t>(best_dist - kDistBase[dc]), kDistExtra[dc]);
+            t.is_match = true;
+            t.sym = static_cast<uint16_t>(257 + lc);
+            t.len_bits = kLenExtra[lc];
+            t.len_extra = static_cast<uint16_t>(best_len - kLenBase[lc]);
+            t.dist_sym = static_cast<uint16_t>(dc);
+            t.dist_bits = kDistExtra[dc];
+            t.dist_extra = static_cast<uint16_t>(best_dist - kDistBase[dc]);
+            ++lit_freq[t.sym];
+            ++dist_freq[dc];
 
-            // Register the skipped positions so later matches can find them.
             for (size_t k = i + 1; k < i + static_cast<size_t>(best_len) && k + 2 < n; ++k) {
                 const uint32_t h2 = hash3(k);
                 prev[k] = head[h2];
@@ -298,13 +432,108 @@ std::vector<uint8_t> deflate_fixed(const std::vector<uint8_t>& data) {
             }
             i += static_cast<size_t>(best_len);
         } else {
-            emit_literal(w, data[i]);
+            t.is_match = false;
+            t.sym = data[i];
+            ++lit_freq[t.sym];
             ++i;
         }
+        tokens.push_back(t);
     }
-    emit_literal(w, 256);   // end of block
+    ++lit_freq[256];   // end of block
+}
+
+// One DEFLATE block with dynamic Huffman codes.
+std::vector<uint8_t> deflate_dynamic(const std::vector<uint8_t>& data) {
+    std::vector<Token> tokens;
+    std::vector<uint32_t> lit_freq, dist_freq;
+    lz77(data, tokens, lit_freq, dist_freq);
+
+    std::vector<uint8_t> lit_len, dist_len;
+    build_lengths(lit_freq, 15, lit_len);
+    build_lengths(dist_freq, 15, dist_len);
+    // A block with no matches still has to carry a valid distance tree.
+    if (std::all_of(dist_len.begin(), dist_len.end(), [](uint8_t v) { return v == 0; })) {
+        dist_len[0] = dist_len[1] = 1;
+    }
+
+    std::vector<uint16_t> lit_code, dist_code;
+    build_codes(lit_len, lit_code);
+    build_codes(dist_len, dist_code);
+
+    // Trim the alphabets to the highest symbol actually used.
+    int hlit = 286;
+    while (hlit > 257 && lit_len[hlit - 1] == 0) --hlit;
+    int hdist = 30;
+    while (hdist > 1 && dist_len[hdist - 1] == 0) --hdist;
+
+    // Code lengths of both alphabets, concatenated and run-length encoded.
+    std::vector<uint8_t> all_lens;
+    all_lens.insert(all_lens.end(), lit_len.begin(), lit_len.begin() + hlit);
+    all_lens.insert(all_lens.end(), dist_len.begin(), dist_len.begin() + hdist);
+    std::vector<ClSym> cl;
+    rle_lengths(all_lens, cl);
+
+    std::vector<uint32_t> cl_freq(19, 0);
+    for (const ClSym& c : cl) ++cl_freq[c.sym];
+    std::vector<uint8_t> cl_len;
+    build_lengths(cl_freq, 7, cl_len);
+    std::vector<uint16_t> cl_code;
+    build_codes(cl_len, cl_code);
+
+    static const int kClOrder[19] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5,
+                                     11, 4, 12, 3, 13, 2, 14, 1, 15};
+    int hclen = 19;
+    while (hclen > 4 && cl_len[kClOrder[hclen - 1]] == 0) --hclen;
+
+    BitWriter w;
+    w.bits(1, 1);   // BFINAL
+    w.bits(2, 2);   // BTYPE = 10, dynamic Huffman
+    w.bits(static_cast<uint32_t>(hlit - 257), 5);
+    w.bits(static_cast<uint32_t>(hdist - 1), 5);
+    w.bits(static_cast<uint32_t>(hclen - 4), 4);
+    for (int k = 0; k < hclen; ++k) w.bits(cl_len[kClOrder[k]], 3);
+    for (const ClSym& c : cl) {
+        w.code(cl_code[c.sym], cl_len[c.sym]);
+        if (c.extra_bits) w.bits(c.extra, c.extra_bits);
+    }
+    for (const Token& t : tokens) {
+        w.code(lit_code[t.sym], lit_len[t.sym]);
+        if (t.is_match) {
+            if (t.len_bits) w.bits(t.len_extra, t.len_bits);
+            w.code(dist_code[t.dist_sym], dist_len[t.dist_sym]);
+            if (t.dist_bits) w.bits(t.dist_extra, t.dist_bits);
+        }
+    }
+    w.code(lit_code[256], lit_len[256]);
     w.flush();
     return w.out;
+}
+
+// A stored (uncompressed) block, the fallback for data that will not compress.
+std::vector<uint8_t> deflate_stored(const std::vector<uint8_t>& data) {
+    std::vector<uint8_t> out;
+    size_t off = 0;
+    while (off < data.size() || off == 0) {
+        const uint16_t len = static_cast<uint16_t>(std::min<size_t>(65535, data.size() - off));
+        const bool last = (off + len >= data.size());
+        out.push_back(last ? 1 : 0);          // BFINAL in bit 0, BTYPE = 00
+        out.push_back(static_cast<uint8_t>(len & 0xFF));
+        out.push_back(static_cast<uint8_t>(len >> 8));
+        out.push_back(static_cast<uint8_t>(~len & 0xFF));
+        out.push_back(static_cast<uint8_t>((~len >> 8) & 0xFF));
+        out.insert(out.end(), data.begin() + off, data.begin() + off + len);
+        off += len;
+        if (last) break;
+    }
+    return out;
+}
+
+std::vector<uint8_t> deflate(const std::vector<uint8_t>& data) {
+    if (data.empty()) return deflate_stored(data);
+    std::vector<uint8_t> dyn = deflate_dynamic(data);
+    // Pathological inputs can expand; a stored block bounds the damage.
+    if (dyn.size() >= data.size() + 5) return deflate_stored(data);
+    return dyn;
 }
 
 void put_u32(std::vector<uint8_t>& v, uint32_t x) {
@@ -376,7 +605,7 @@ std::vector<uint8_t> encode_image_data(const std::vector<uint8_t>& rgb, int w, i
     // zlib stream: 2-byte header, DEFLATE payload, Adler-32 of the raw data.
     std::vector<uint8_t> z;
     z.push_back(0x78); z.push_back(0x01);      // CM=8, CINFO=7, FCHECK ok, no dict
-    const std::vector<uint8_t> comp = deflate_fixed(raw);
+    const std::vector<uint8_t> comp = deflate(raw);
     z.insert(z.end(), comp.begin(), comp.end());
     put_u32(z, adler32(raw.data(), raw.size()));
     return z;
@@ -443,23 +672,65 @@ bool write_apng(const std::string& path, const std::vector<std::vector<uint8_t>>
     put_u32(actl, static_cast<uint32_t>(std::max(0, loops)));   // 0 = forever
     put_chunk(png, "acTL", actl);
 
+    const size_t stride = static_cast<size_t>(w) * 3;
     uint32_t seq = 0;
+
     for (size_t i = 0; i < frames.size(); ++i) {
+        // Only the part of the frame that actually changed needs storing.
+        // With dispose_op = NONE the previous frame stays in the buffer, and
+        // blend_op = SOURCE overwrites just this rectangle - so a sequence
+        // where a small bright spot moves across a static disc costs a
+        // fraction of what full keyframes would.
+        int fx = 0, fy = 0, fw = w, fh = h;
+        if (i > 0) {
+            const std::vector<uint8_t>& prev = frames[i - 1];
+            const std::vector<uint8_t>& cur  = frames[i];
+            int x0 = w, y0 = h, x1 = -1, y1 = -1;
+            for (int y = 0; y < h; ++y) {
+                const uint8_t* a = prev.data() + y * stride;
+                const uint8_t* b = cur.data() + y * stride;
+                if (std::memcmp(a, b, stride) == 0) continue;
+                if (y < y0) y0 = y;
+                if (y > y1) y1 = y;
+                for (int x = 0; x < w; ++x)
+                    if (std::memcmp(a + 3 * x, b + 3 * x, 3) != 0) {
+                        if (x < x0) x0 = x;
+                        if (x > x1) x1 = x;
+                    }
+            }
+            if (x1 < x0) {          // identical frame: store one pixel
+                fx = fy = 0; fw = fh = 1;
+            } else {
+                fx = x0; fy = y0; fw = x1 - x0 + 1; fh = y1 - y0 + 1;
+            }
+        }
+
+        std::vector<uint8_t> sub;
+        if (fw == w && fh == h && fx == 0 && fy == 0) {
+            sub = frames[i];
+        } else {
+            sub.resize(static_cast<size_t>(fw) * fh * 3);
+            for (int y = 0; y < fh; ++y)
+                std::memcpy(sub.data() + static_cast<size_t>(y) * fw * 3,
+                            frames[i].data() + (static_cast<size_t>(fy + y) * w + fx) * 3,
+                            static_cast<size_t>(fw) * 3);
+        }
+
         std::vector<uint8_t> fctl;
         put_u32(fctl, seq++);
-        put_u32(fctl, static_cast<uint32_t>(w));
-        put_u32(fctl, static_cast<uint32_t>(h));
-        put_u32(fctl, 0);                       // x offset
-        put_u32(fctl, 0);                       // y offset
+        put_u32(fctl, static_cast<uint32_t>(fw));
+        put_u32(fctl, static_cast<uint32_t>(fh));
+        put_u32(fctl, static_cast<uint32_t>(fx));
+        put_u32(fctl, static_cast<uint32_t>(fy));
         // Delay as an exact rational: 1/fps of a second.
         fctl.push_back(0); fctl.push_back(1);                          // delay_num = 1
         fctl.push_back(static_cast<uint8_t>((fps >> 8) & 0xFF));       // delay_den = fps
         fctl.push_back(static_cast<uint8_t>(fps & 0xFF));
-        fctl.push_back(0);   // dispose_op = NONE
-        fctl.push_back(0);   // blend_op   = SOURCE
+        fctl.push_back(0);   // dispose_op = NONE   (leave the buffer alone)
+        fctl.push_back(0);   // blend_op   = SOURCE (overwrite the rectangle)
         put_chunk(png, "fcTL", fctl);
 
-        const std::vector<uint8_t> z = encode_image_data(frames[i], w, h);
+        const std::vector<uint8_t> z = encode_image_data(sub, fw, fh);
         if (i == 0) {
             put_chunk(png, "IDAT", z);
         } else {
