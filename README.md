@@ -170,6 +170,89 @@ Sun, and the program says so rather than quietly cheating the scale.
 
 ---
 
+## Video
+
+There is a constraint here worth stating before the how-to, because it decides
+the whole design: **a Novikov–Thorne disc is stationary and axisymmetric.**
+Nothing about it depends on `t` or on `φ`. So orbiting the camera in azimuth,
+or "spinning the disc", produces 240 pixel-identical frames. Something has to
+genuinely break the symmetry.
+
+Two things can:
+
+**An orbiting hot spot** (`--hotspot R`) — a compact brightness enhancement
+carried around on a circular Keplerian geodesic. This is not invented for the
+demo: GRAVITY has watched exactly this near Sgr A*, flares tracing loops on the
+sky with 30–70 minute periods.
+
+![Hot spot orbit](gallery/hotspot-orbit.apng)
+
+The timing is the interesting part. Each ray already carries the coordinate time
+it took to arrive (negative — it is traced into the past), so the emission time
+is just `t_emit = t_observer + y[Y_T]`, and the spot is placed where it *was*
+then. Light bending means a photon that loops around the hole arrives much later
+than one that came straight, so the secondary image shows the spot at an earlier
+orbital phase than the primary. That echo falls straight out of integrating `t`
+alongside everything else. At the default camera distance the light crossing time
+is comparable to the orbital period, so the lag is a visible fraction of a cycle.
+
+**Moving the camera in `θ` or `r`** — the two directions that are not symmetry
+directions:
+
+![Inclination sweep](gallery/inclination-sweep.apng)
+
+```bash
+# 10 seconds, 24 fps, two orbits of a hot spot — self-contained animated PNG
+./blackhole --preset sgra --inclination 60 --fov 34 \
+    --hotspot 9 --hotspot-size 1.1 --hotspot-contrast 200 \
+    --orbits 2 --duration 10 --fps 24 \
+    --width 400 --height 300 --spp 1 --no-stars \
+    --out gallery/hotspot-orbit.apng
+
+# face-on to edge-on
+./blackhole --preset sgra --inclination 4 --inclination-to 89 --fov 34 \
+    --duration 10 --fps 24 --width 480 --height 300 --spp 1 --no-stars \
+    --out gallery/inclination-sweep.apng
+```
+
+`.apng` writes a self-contained animated PNG that plays in any browser, using
+the same DEFLATE encoder as the stills — no ffmpeg needed. **Any other
+extension writes a numbered PNG sequence** and prints the ffmpeg command for an
+mp4:
+
+```bash
+./blackhole --preset sgra --hotspot 9 --duration 10 --fps 24 \
+    --width 1280 --height 720 --spp 2 --out frames/f_%04d.png
+ffmpeg -framerate 24 -i frames/f_%04d.png -c:v libx264 -pix_fmt yuv420p -crf 18 out.mp4
+```
+
+The program reports what the film means physically:
+
+```
+  Hot spot
+  orbital radius       9.00 M   (ISCO is at 2.32 M)
+  orbital period       178.7 GM/c^3  =  63.1 minutes
+  orbital speed        0.3333 c (as measured by a local static observer)
+  sequence covers      2 orbits  =  7.5678e+03 s of real time
+  played over          10.00 s at 24 fps  ->  757 x faster than real time
+```
+
+That period scales with mass exactly as it should: 63 minutes for Sgr A\*,
+55 days for M87\*, 7.3 milliseconds for a 10 M☉ hole.
+
+Two details that matter for animation. **Exposure is metered once and locked**
+for the whole sequence — metering per frame would make the film flicker, and
+worse, would suppress the very brightness variation the hot spot is there to
+show. And a pure hot-spot sequence divides the phase by the frame count rather
+than by count − 1, so the last frame does not duplicate the first and the loop
+is seamless; a camera sweep is not periodic and does reach its endpoint exactly.
+
+Cost is the obvious catch: a 10-second film is 240 renders. The settings above
+take roughly 20 minutes on four cores. Keep `--spp 1` and a small `--width`
+while you find the shot.
+
+---
+
 ## Verification
 
 `./blackhole --test` runs 40 checks. It is the point of the project as much as
@@ -290,6 +373,19 @@ IMAGE
   --tonemap NAME       aces | reinhard | log | linear
   --glare X            veiling-glare strength in [0,1]
   --log-decades N      decades of radiance the "log" curve spans
+  --out FILE           .png / .ppm, or .apng for a self-contained animation
+
+ANIMATION
+  --duration S         make a film S seconds long (with --fps sets the count)
+  --frames N           or give the frame count directly
+  --fps N              frames per second (default 24)
+  --hotspot R          orbiting hot spot at radius R - the thing that moves
+  --hotspot-contrast X peak brightness over the quiescent disc
+  --hotspot-size S     Gaussian radius in GM/c^2
+  --orbits N           hot-spot orbits covered by the sequence
+  --inclination-to D   sweep the viewing angle to D degrees
+  --distance-to R      sweep the camera distance to R
+  --fov-to D           sweep the field of view to D degrees
 
   --out FILE           output file (.png or .ppm)
 
@@ -383,9 +479,9 @@ negligible at every scale in these images. No cosmological expansion.
 | `src/geodesic.h` | Hamiltonian geodesic equations, Dormand–Prince 5(4) with dense output |
 | `src/disc.h` | Novikov–Thorne / Page–Thorne accretion disc |
 | `src/spectrum.h/.cpp` | Planck radiance → CIE 1931 → sRGB |
-| `src/scene.h` | star field, the Sun, camera |
+| `src/scene.h` | star field, the Sun, orbiting hot spot, camera |
 | `src/render.cpp` | backwards ray tracing, event detection, shading |
-| `src/image.h/.cpp` | tone mapping and the PNG encoder |
+| `src/image.h/.cpp` | tone mapping, the PNG encoder, and the APNG writer |
 | `src/validate.cpp` | the 40 physics checks |
 
 ## References

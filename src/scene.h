@@ -277,6 +277,64 @@ struct SunBody {
 };
 
 // ---------------------------------------------------------------------------
+// An orbiting hot spot: a compact brightness enhancement carried around the
+// disc on a circular Keplerian geodesic.
+//
+// This exists because a Novikov-Thorne disc is *stationary and axisymmetric*,
+// which has a consequence worth being explicit about: moving the camera in
+// azimuth, or letting the disc "rotate", changes nothing at all in the image.
+// A film of such a scene is 240 identical frames.  Something has to genuinely
+// break the symmetry, and an orbiting over-density is the standard one -
+// GRAVITY has watched exactly this near Sgr A*, flares tracing loops on the
+// sky with 30-70 minute periods.
+//
+// The spot is modelled as a Gaussian enhancement of the local emitted flux, so
+// the disc stays optically thick and the "first crossing wins" rule is intact.
+//
+// The important part is the timing.  Each traced ray already carries the
+// coordinate time it took to get here (negative, since it is traced into the
+// past), so the emission time is simply
+//
+//     t_emit = t_observer + y[Y_T]
+//
+// and the spot is placed where it was *then*, not where it is now.  Light
+// bending means a photon that loops around the hole arrives much later than
+// one that came straight, so the secondary image shows the spot at an earlier
+// orbital phase than the primary.  That echo is a real, measurable effect and
+// falls straight out of integrating t along with everything else.
+// ---------------------------------------------------------------------------
+struct HotSpot {
+    bool   enabled   = false;
+    double r         = 8.0;    // orbital radius, gravitational radii
+    double phi0      = 0.0;    // azimuth at t = 0
+    double sigma     = 0.6;    // Gaussian radius, gravitational radii
+    double contrast  = 25.0;   // peak flux enhancement over the quiescent disc
+    double omega     = 0.0;    // orbital angular velocity, set by set_spin()
+    int    sense     = +1;
+
+    void set_spin(double a, int prograde) {
+        sense = prograde;
+        omega = prograde / (r * std::sqrt(r) + prograde * a);
+    }
+
+    // Orbital period in units of GM/c^3.
+    double period() const { return (omega != 0.0) ? 2.0 * M_PI / std::fabs(omega) : 0.0; }
+
+    // Flux enhancement factor at an equatorial point (r_hit, phi_hit) that
+    // emitted at coordinate time t_emit.
+    double enhancement(double r_hit, double phi_hit, double t_emit) const {
+        if (!enabled) return 1.0;
+        const double phi_s = phi0 + omega * t_emit;
+        // Separation in the equatorial plane, measured with flat distances -
+        // the spot is small compared with the radius of curvature here.
+        const double dx = r_hit * std::cos(phi_hit) - r * std::cos(phi_s);
+        const double dy = r_hit * std::sin(phi_hit) - r * std::sin(phi_s);
+        const double d2 = dx * dx + dy * dy;
+        return 1.0 + contrast * std::exp(-0.5 * d2 / (sigma * sigma));
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Camera.  The image plane is defined in the observer's own orthonormal frame,
 // so relativistic aberration and the gravitational distortion of the local sky
 // are automatic consequences of using that tetrad - there is no separate

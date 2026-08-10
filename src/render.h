@@ -30,6 +30,12 @@ struct RenderConfig {
     uint64_t seed = 20240921ull;
     bool  sun_enabled = false;
     SunBody sun;
+    HotSpot hotspot;
+
+    // Observer coordinate time of this frame, in GM/c^3.  Only matters when
+    // something in the scene is time-dependent; a bare Novikov-Thorne disc is
+    // stationary, so every frame would otherwise be identical.
+    double observer_time = 0.0;
 
     // Integration
     double rtol = 1e-9;

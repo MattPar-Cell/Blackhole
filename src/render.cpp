@@ -193,8 +193,20 @@ static spec::XYZ shade(const RenderConfig& cfg, const NovikovThorneDisc* disc,
         case Hit::What::Disc: {
             ++local.disc_hits;
             const double r = hit.y[Y_R];
-            const double T_em = disc->temperature(r);
+            double T_em = disc->temperature(r);
             if (T_em <= 0.0) return {0.0, 0.0, 0.0};
+
+            // An orbiting hot spot enhances the locally emitted flux. Since
+            // F = sigma T^4, a factor f on the flux is f^{1/4} on the
+            // temperature. The emission time is the observer's time plus the
+            // (negative) coordinate time the ray spent getting here, so the
+            // spot is sampled where it was when the light left, not where it
+            // is now.
+            if (cfg.hotspot.enabled) {
+                const double t_emit = cfg.observer_time + hit.y[Y_T];
+                const double f = cfg.hotspot.enhancement(r, hit.y[Y_PH], t_emit);
+                T_em *= std::pow(f, 0.25);
+            }
             const std::array<double, 4> u = disc->four_velocity(r);
             const double g = redshift_factor(hit.y, u);
             if (g <= 0.0) return {0.0, 0.0, 0.0};

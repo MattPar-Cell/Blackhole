@@ -43,6 +43,11 @@ std::vector<uint8_t> develop(const Image& im, double exposure, ToneMap tm,
                              double log_decades = 6.0);
 
 bool write_png(const std::string& path, const std::vector<uint8_t>& rgb, int w, int h);
+
+// Animated PNG: a self-contained moving image that plays in any browser, with
+// no external encoder. Frames must all be w*h*3 bytes. loops = 0 means forever.
+bool write_apng(const std::string& path, const std::vector<std::vector<uint8_t>>& frames,
+                int w, int h, int fps, int loops = 0);
 bool write_ppm(const std::string& path, const std::vector<uint8_t>& rgb, int w, int h);
 
 } // namespace img

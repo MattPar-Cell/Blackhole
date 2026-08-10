@@ -10,6 +10,7 @@
 #include <cmath>
 #include <thread>
 #include <algorithm>
+#include <chrono>
 
 int run_validation();   // validate.cpp
 
@@ -28,10 +29,60 @@ struct Options {
 
     bool user_set_fov = false;
     bool user_set_distance = false;
+
+    // Animation
+    int    frames = 0;              // 0 = single still image
+    int    fps = 24;
+    double duration = 0.0;          // seconds of video; overrides `frames`
+    double incl_to = -1e9;          // end-of-sequence inclination, degrees
+    double dist_to = -1.0;          // end-of-sequence camera radius
+    double fov_to  = -1.0;          // end-of-sequence field of view, radians
+    double orbits  = 1.0;           // hot-spot orbits covered by the sequence
+    bool   apng = false;
+    std::string frame_pattern;      // printf pattern for a PNG sequence
+    double time_span = 0.0;         // coordinate time covered, in GM/c^3
+
     double sun_distance = 0.0;      // 0 = auto placement
     double inclination_deg = 85.0;
     std::string preset = "sgra";
 };
+
+// Interpolate the camera and the clock to fraction u in [0, 1] of the sequence.
+void set_frame(const Options& o, bh::RenderConfig& fc, double u) {
+    if (o.incl_to > -1e8)
+        fc.cam.theta = std::clamp(o.inclination_deg + u * (o.incl_to - o.inclination_deg),
+                                  0.5, 179.5) * M_PI / 180.0;
+    if (o.dist_to > 0.0) fc.cam.r = o.cfg.cam.r + u * (o.dist_to - o.cfg.cam.r);
+    if (o.fov_to  > 0.0) fc.cam.fov = o.cfg.cam.fov + u * (o.fov_to - o.cfg.cam.fov);
+    fc.observer_time = u * o.time_span;
+}
+
+void accumulate(bh::RenderStats& a, const bh::RenderStats& b) {
+    a.rays += b.rays; a.steps += b.steps; a.captured += b.captured;
+    a.disc_hits += b.disc_hits; a.sun_hits += b.sun_hits;
+    a.escaped += b.escaped; a.exhausted += b.exhausted;
+    a.seconds += b.seconds;
+    a.max_norm_error = std::max(a.max_norm_error, b.max_norm_error);
+    a.max_carter_drift = std::max(a.max_carter_drift, b.max_carter_drift);
+}
+
+void print_stats(const Options& o, const bh::RenderStats& stats, double exposure) {
+    std::printf("Rendered in %.2f s  (%.3g rays, %.3g integration steps, %.1f steps/ray)\n",
+                stats.seconds, static_cast<double>(stats.rays),
+                static_cast<double>(stats.steps),
+                stats.rays ? static_cast<double>(stats.steps) / stats.rays : 0.0);
+    std::printf("  captured by the hole  %5.1f%%\n", 100.0 * stats.captured / std::max(1LL, stats.rays));
+    std::printf("  hit the disc          %5.1f%%\n", 100.0 * stats.disc_hits / std::max(1LL, stats.rays));
+    if (o.cfg.sun_enabled)
+        std::printf("  hit the Sun           %5.1f%%\n", 100.0 * stats.sun_hits / std::max(1LL, stats.rays));
+    std::printf("  escaped to the sky    %5.1f%%\n", 100.0 * stats.escaped / std::max(1LL, stats.rays));
+    if (stats.exhausted)
+        std::printf("  step limit reached    %5.1f%%\n", 100.0 * stats.exhausted / std::max(1LL, stats.rays));
+    std::printf("  worst |g^ab p_a p_b|  %.2e   (photons should stay exactly null)\n",
+                stats.max_norm_error);
+    std::printf("  worst drift in Q      %.2e   (Carter's constant)\n", stats.max_carter_drift);
+    std::printf("  exposure              %.4e%s\n", exposure, o.exposure > 0.0 ? "" : "  (auto, locked)");
+}
 
 [[noreturn]] void usage(int code) {
     std::printf(R"(
@@ -72,7 +123,24 @@ IMAGE
   --tonemap NAME       aces | reinhard | log | linear
   --glare X            veiling-glare strength in [0,1] (default 0.12)
   --log-decades N      decades of radiance the "log" curve spans (default 6)
-  --out FILE           output file (.png or .ppm)
+  --out FILE           output file (.png, .ppm, or .apng for animation)
+
+ANIMATION
+  --duration S         make a film S seconds long (with --fps sets the count)
+  --frames N           or give the frame count directly
+  --fps N              frames per second (default 24)
+  --hotspot R          orbiting hot spot at radius R: the thing that actually
+                       moves.  A Novikov-Thorne disc is stationary and
+                       axisymmetric, so without this every frame is identical
+  --hotspot-contrast X peak brightness over the quiescent disc (default 25)
+  --hotspot-size S     Gaussian radius in GM/c^2 (default 0.6)
+  --orbits N           hot-spot orbits covered by the sequence (default 1)
+  --inclination-to D   sweep the viewing angle to D degrees
+  --distance-to R      sweep the camera distance to R
+  --fov-to D           sweep the field of view to D degrees
+                       Writing to a .apng gives a self-contained movie; any
+                       other extension writes a numbered frame sequence and
+                       prints the ffmpeg command to turn it into an mp4.
 
 OTHER
   --threads N          worker threads (default: all cores)
@@ -342,6 +410,16 @@ int main(int argc, char** argv) {
             else { std::fprintf(stderr, "error: unknown tonemap '%s'\n", t.c_str()); return 2; }
         }
         else if (s == "--out") o.out = need_str(argc, argv, i);
+        else if (s == "--frames") o.frames = static_cast<int>(need_num(argc, argv, i));
+        else if (s == "--fps") o.fps = std::max(1, static_cast<int>(need_num(argc, argv, i)));
+        else if (s == "--duration") o.duration = need_num(argc, argv, i);
+        else if (s == "--orbits") o.orbits = need_num(argc, argv, i);
+        else if (s == "--inclination-to") o.incl_to = need_num(argc, argv, i);
+        else if (s == "--distance-to") o.dist_to = need_num(argc, argv, i);
+        else if (s == "--fov-to") o.fov_to = need_num(argc, argv, i) * M_PI / 180.0;
+        else if (s == "--hotspot") { o.cfg.hotspot.enabled = true; o.cfg.hotspot.r = need_num(argc, argv, i); }
+        else if (s == "--hotspot-contrast") o.cfg.hotspot.contrast = need_num(argc, argv, i);
+        else if (s == "--hotspot-size") o.cfg.hotspot.sigma = need_num(argc, argv, i);
         else if (s == "--threads") o.cfg.threads = static_cast<int>(need_num(argc, argv, i));
         else if (s == "--quiet") o.cfg.quiet = true;
         else { std::fprintf(stderr, "error: unknown option '%s'\n", s.c_str()); usage(2); }
@@ -353,6 +431,70 @@ int main(int argc, char** argv) {
     o.ppm = o.out.size() > 4 && o.out.substr(o.out.size() - 4) == ".ppm";
 
     if (o.cfg.sun_enabled) place_sun(o);
+
+    // ---- animation setup ------------------------------------------------
+    if (o.duration > 0.0) o.frames = std::max(1, static_cast<int>(std::lround(o.duration * o.fps)));
+    if (o.frames > 1) {
+        const size_t dot = o.out.find_last_of('.');
+        const std::string ext = (dot == std::string::npos) ? "" : o.out.substr(dot);
+        o.apng = (ext == ".apng");
+        if (!o.apng) {
+            // Anything else becomes a numbered PNG sequence.  A printf pattern
+            // supplied by the user is honoured as-is.
+            o.frame_pattern = (o.out.find('%') != std::string::npos)
+                            ? o.out
+                            : o.out.substr(0, dot == std::string::npos ? o.out.size() : dot)
+                              + "_%04d.png";
+        }
+        o.cfg.hotspot.set_spin(o.cfg.spin, o.cfg.disc_sense);
+        // The sequence covers a whole number of hot-spot orbits by default, so
+        // that it loops seamlessly.  With no hot spot the scene is stationary
+        // and time is irrelevant, so the span is left at zero.
+        if (o.cfg.hotspot.enabled) o.time_span = o.orbits * o.cfg.hotspot.period();
+
+        if (o.cfg.hotspot.enabled && !o.cfg.quiet) {
+            const double r_g_over_c = phys::r_g_metres(o.cfg.M_kg) / phys::c;
+            const double period_s = o.cfg.hotspot.period() * r_g_over_c;
+            const double span_s = o.time_span * r_g_over_c;
+            const double video_s = static_cast<double>(o.frames) / o.fps;
+            std::printf("\n  Hot spot\n");
+            std::printf("  orbital radius       %.2f M   (ISCO is at %.2f M)\n",
+                        o.cfg.hotspot.r, bh::isco_radius(o.cfg.spin, o.cfg.disc_sense));
+            char human[64];
+            if (period_s < 90.0)          std::snprintf(human, sizeof human, "%.3g seconds", period_s);
+            else if (period_s < 5400.0)   std::snprintf(human, sizeof human, "%.3g minutes", period_s / 60.0);
+            else if (period_s < 1.728e5)  std::snprintf(human, sizeof human, "%.3g hours", period_s / 3600.0);
+            else if (period_s < 3.156e7)  std::snprintf(human, sizeof human, "%.3g days", period_s / 86400.0);
+            else                          std::snprintf(human, sizeof human, "%.3g years", period_s / phys::year);
+            std::printf("  orbital period       %.4g GM/c^3  =  %s\n",
+                        o.cfg.hotspot.period(), human);
+            std::printf("  orbital speed        %.4f c (as measured by a local static observer)\n",
+                        1.0 / std::sqrt(o.cfg.hotspot.r));
+            std::printf("  sequence covers      %.3g orbits  =  %.4e s of real time\n",
+                        o.orbits, span_s);
+            std::printf("  played over          %.2f s at %d fps  ->  %.4g x %s\n",
+                        video_s, o.fps,
+                        span_s > video_s ? span_s / video_s : video_s / span_s,
+                        span_s > video_s ? "faster than real time" : "slower than real time");
+            std::printf("  light crossing time  %.4g GM/c^3 from the camera - comparable to\n",
+                        o.cfg.cam.r);
+            std::printf("                       the orbital period, so the lensed images lag\n");
+            std::printf("                       the direct one by a visible fraction of a cycle\n");
+        }
+
+        const bool moving = o.cfg.hotspot.enabled || o.incl_to > -1e8 ||
+                            o.dist_to > 0.0 || o.fov_to > 0.0;
+        if (!moving) {
+            std::fprintf(stderr,
+                "error: nothing in this scene changes with time, so every frame would be\n"
+                "       identical.  A Novikov-Thorne disc is stationary and axisymmetric.\n"
+                "       Add --hotspot R for an orbiting bright spot, or sweep the camera\n"
+                "       with --inclination-to / --distance-to / --fov-to.\n");
+            return 2;
+        }
+    } else {
+        o.cfg.hotspot.set_spin(o.cfg.spin, o.cfg.disc_sense);
+    }
 
     // The escape sphere has to sit outside everything in the scene.
     double far = o.cfg.cam.r * 3.0 + 100.0;
@@ -373,35 +515,119 @@ int main(int argc, char** argv) {
                                        : static_cast<int>(std::thread::hardware_concurrency()));
     }
 
-    bh::RenderStats stats;
-    img::Image im = bh::render(o.cfg, stats);
+    // ---------------------------------------------------------------------
+    // Still image
+    // ---------------------------------------------------------------------
+    if (o.frames <= 1) {
+        bh::RenderStats stats;
+        img::Image im = bh::render(o.cfg, stats);
+        if (o.glare > 0.0) img::add_glare(im, o.glare, o.glare_radius);
+        const double exposure = (o.exposure > 0.0) ? o.exposure : img::auto_exposure(im);
+        const std::vector<uint8_t> rgb = img::develop(im, exposure, o.tonemap, o.log_decades);
 
-    if (o.glare > 0.0) img::add_glare(im, o.glare, o.glare_radius);
+        const bool ok = o.ppm ? img::write_ppm(o.out, rgb, o.cfg.width, o.cfg.height)
+                              : img::write_png(o.out, rgb, o.cfg.width, o.cfg.height);
+        if (!ok) { std::fprintf(stderr, "error: could not write %s\n", o.out.c_str()); return 1; }
 
-    const double exposure = (o.exposure > 0.0) ? o.exposure : img::auto_exposure(im);
-    const std::vector<uint8_t> rgb = img::develop(im, exposure, o.tonemap, o.log_decades);
+        if (!o.cfg.quiet) {
+            print_stats(o, stats, exposure);
+            std::printf("\nWrote %s\n", o.out.c_str());
+        }
+        return 0;
+    }
 
-    const bool ok = o.ppm ? img::write_ppm(o.out, rgb, o.cfg.width, o.cfg.height)
-                          : img::write_png(o.out, rgb, o.cfg.width, o.cfg.height);
-    if (!ok) { std::fprintf(stderr, "error: could not write %s\n", o.out.c_str()); return 1; }
+    // ---------------------------------------------------------------------
+    // Animation
+    // ---------------------------------------------------------------------
+    //
+    // Exposure has to be locked across the whole sequence.  Metering each
+    // frame independently would make the film flicker as the brightest thing
+    // in shot changes - and worse, it would hide the very brightness variation
+    // an orbiting hot spot is there to show.  So the meter is run once, on a
+    // cheap low-resolution probe of the middle frame, and then held.
+    double exposure = o.exposure;
+    if (exposure <= 0.0) {
+        bh::RenderConfig probe = o.cfg;
+        probe.width = std::max(64, o.cfg.width / 6);
+        probe.height = std::max(36, o.cfg.height / 6);
+        probe.sqrt_spp = 1;
+        probe.star_count = std::min(o.cfg.star_count, 40000);
+        probe.quiet = true;
+        set_frame(o, probe, 0.5);
+        bh::RenderStats pstats;
+        img::Image pim = bh::render(probe, pstats);
+        if (o.glare > 0.0) img::add_glare(pim, o.glare, o.glare_radius);
+        exposure = img::auto_exposure(pim);
+    }
+
+    std::vector<std::vector<uint8_t>> apng_frames;
+    if (o.apng) apng_frames.reserve(o.frames);
+
+    bh::RenderStats total;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    for (int f = 0; f < o.frames; ++f) {
+        bh::RenderConfig fc = o.cfg;
+        fc.quiet = true;
+        // A pure hot-spot orbit is periodic, so the last frame must not repeat
+        // the first: divide by the frame count, not by count-1.  A camera
+        // sweep is not periodic and does need to reach its endpoint exactly.
+        const bool sweeping = o.incl_to > -1e8 || o.dist_to > 0.0 || o.fov_to > 0.0;
+        const double denom = sweeping ? std::max(1, o.frames - 1) : o.frames;
+        const double u = static_cast<double>(f) / denom;
+        set_frame(o, fc, u);
+
+        bh::RenderStats fs;
+        img::Image im = bh::render(fc, fs);
+        if (o.glare > 0.0) img::add_glare(im, o.glare, o.glare_radius);
+        std::vector<uint8_t> rgb = img::develop(im, exposure, o.tonemap, o.log_decades);
+
+        accumulate(total, fs);
+
+        if (o.apng) {
+            apng_frames.push_back(std::move(rgb));
+        } else {
+            char name[1024];
+            std::snprintf(name, sizeof name, o.frame_pattern.c_str(), f);
+            if (!img::write_png(name, rgb, fc.width, fc.height)) {
+                std::fprintf(stderr, "error: could not write %s\n", name);
+                return 1;
+            }
+        }
+
+        if (!o.cfg.quiet) {
+            const double el = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count();
+            const double eta = (f > 0) ? el / (f + 1) * (o.frames - f - 1) : 0.0;
+            std::fprintf(stderr, "\r  frame %4d/%d   %.0f s elapsed, ~%.0f s remaining   ",
+                         f + 1, o.frames, el, eta);
+            std::fflush(stderr);
+        }
+    }
+    if (!o.cfg.quiet) std::fprintf(stderr, "\n");
+
+    if (o.apng) {
+        if (!img::write_apng(o.out, apng_frames, o.cfg.width, o.cfg.height, o.fps)) {
+            std::fprintf(stderr, "error: could not write %s\n", o.out.c_str());
+            return 1;
+        }
+    }
 
     if (!o.cfg.quiet) {
-        std::printf("Rendered in %.2f s  (%.3g rays, %.3g integration steps, %.1f steps/ray)\n",
-                    stats.seconds, static_cast<double>(stats.rays),
-                    static_cast<double>(stats.steps),
-                    stats.rays ? static_cast<double>(stats.steps) / stats.rays : 0.0);
-        std::printf("  captured by the hole  %5.1f%%\n", 100.0 * stats.captured / std::max(1LL, stats.rays));
-        std::printf("  hit the disc          %5.1f%%\n", 100.0 * stats.disc_hits / std::max(1LL, stats.rays));
-        if (o.cfg.sun_enabled)
-            std::printf("  hit the Sun           %5.1f%%\n", 100.0 * stats.sun_hits / std::max(1LL, stats.rays));
-        std::printf("  escaped to the sky    %5.1f%%\n", 100.0 * stats.escaped / std::max(1LL, stats.rays));
-        if (stats.exhausted)
-            std::printf("  step limit reached    %5.1f%%\n", 100.0 * stats.exhausted / std::max(1LL, stats.rays));
-        std::printf("  worst |g^ab p_a p_b|  %.2e   (photons should stay exactly null)\n",
-                    stats.max_norm_error);
-        std::printf("  worst drift in Q      %.2e   (Carter's constant)\n", stats.max_carter_drift);
-        std::printf("  exposure              %.4e%s\n", exposure, o.exposure > 0.0 ? "" : "  (auto)");
-        std::printf("\nWrote %s\n", o.out.c_str());
+        print_stats(o, total, exposure);
+        std::printf("\n");
+        if (o.apng) {
+            std::printf("Wrote %s  (%d frames at %d fps = %.1f s)\n",
+                        o.out.c_str(), o.frames, o.fps,
+                        static_cast<double>(o.frames) / o.fps);
+            std::printf("Plays in any browser. For an mp4, or to edit it, render a PNG\n");
+            std::printf("sequence instead (use --out frames/f_%%04d.png).\n");
+        } else {
+            std::printf("Wrote %d frames matching %s\n", o.frames, o.frame_pattern.c_str());
+            std::printf("\nTurn them into a video with:\n");
+            std::printf("  ffmpeg -framerate %d -i %s -c:v libx264 -pix_fmt yuv420p -crf 18 out.mp4\n",
+                        o.fps, o.frame_pattern.c_str());
+        }
     }
     return 0;
 }

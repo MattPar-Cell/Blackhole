@@ -323,11 +323,9 @@ void put_chunk(std::vector<uint8_t>& v, const char tag[4], const std::vector<uin
     put_u32(v, c);
 }
 
-} // namespace
-
-bool write_png(const std::string& path, const std::vector<uint8_t>& rgb, int w, int h) {
-    if (static_cast<size_t>(w) * h * 3 != rgb.size()) return false;
-
+// Filter the scanlines and wrap the result in a zlib stream: the payload of an
+// IDAT (or, for animation, an fdAT) chunk.
+std::vector<uint8_t> encode_image_data(const std::vector<uint8_t>& rgb, int w, int h) {
     // PNG scanline filtering.  Choosing per row with the standard minimum-sum-
     // of-absolute-differences heuristic gives the LZ77 stage much more to work
     // with on smooth astronomical images.
@@ -381,26 +379,99 @@ bool write_png(const std::string& path, const std::vector<uint8_t>& rgb, int w, 
     const std::vector<uint8_t> comp = deflate_fixed(raw);
     z.insert(z.end(), comp.begin(), comp.end());
     put_u32(z, adler32(raw.data(), raw.size()));
+    return z;
+}
 
-    std::vector<uint8_t> png;
-    const uint8_t sig[8] = {137, 'P', 'N', 'G', '\r', '\n', 26, '\n'};
-    png.insert(png.end(), sig, sig + 8);
-
+std::vector<uint8_t> make_ihdr(int w, int h) {
     std::vector<uint8_t> ihdr;
     put_u32(ihdr, static_cast<uint32_t>(w));
     put_u32(ihdr, static_cast<uint32_t>(h));
     ihdr.push_back(8);   // bit depth
     ihdr.push_back(2);   // colour type: truecolour RGB
     ihdr.push_back(0); ihdr.push_back(0); ihdr.push_back(0);
-    put_chunk(png, "IHDR", ihdr);
-    put_chunk(png, "IDAT", z);
-    put_chunk(png, "IEND", {});
+    return ihdr;
+}
 
+bool write_file(const std::string& path, const std::vector<uint8_t>& bytes) {
     FILE* f = std::fopen(path.c_str(), "wb");
     if (!f) return false;
-    const bool ok = std::fwrite(png.data(), 1, png.size(), f) == png.size();
+    const bool ok = std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
     std::fclose(f);
     return ok;
+}
+
+const uint8_t kPngSig[8] = {137, 'P', 'N', 'G', 13, 10, 26, 10};
+
+} // namespace
+
+bool write_png(const std::string& path, const std::vector<uint8_t>& rgb, int w, int h) {
+    if (static_cast<size_t>(w) * h * 3 != rgb.size()) return false;
+    const std::vector<uint8_t> z = encode_image_data(rgb, w, h);
+
+    std::vector<uint8_t> png;
+    png.insert(png.end(), kPngSig, kPngSig + 8);
+    put_chunk(png, "IHDR", make_ihdr(w, h));
+    put_chunk(png, "IDAT", z);
+    put_chunk(png, "IEND", {});
+    return write_file(path, png);
+}
+
+// ---------------------------------------------------------------------------
+// Animated PNG.  A superset of PNG (the APNG 1.0 specification): an acTL
+// animation-control chunk, then per frame an fcTL frame-control chunk followed
+// by the pixel data - IDAT for the first frame so that a non-animating decoder
+// still shows something sensible, fdAT for the rest.  Every fcTL and fdAT
+// carries a sequence number and they share one counter.
+//
+// This exists so there is a zero-dependency route to a moving picture: the
+// result plays in any browser and in most image viewers, with no encoder to
+// install.  For H.264 or anything you want to edit, write a PNG sequence and
+// hand it to ffmpeg instead.
+// ---------------------------------------------------------------------------
+bool write_apng(const std::string& path, const std::vector<std::vector<uint8_t>>& frames,
+                int w, int h, int fps, int loops) {
+    if (frames.empty()) return false;
+    for (const auto& f : frames)
+        if (static_cast<size_t>(w) * h * 3 != f.size()) return false;
+
+    std::vector<uint8_t> png;
+    png.insert(png.end(), kPngSig, kPngSig + 8);
+    put_chunk(png, "IHDR", make_ihdr(w, h));
+
+    std::vector<uint8_t> actl;
+    put_u32(actl, static_cast<uint32_t>(frames.size()));
+    put_u32(actl, static_cast<uint32_t>(std::max(0, loops)));   // 0 = forever
+    put_chunk(png, "acTL", actl);
+
+    uint32_t seq = 0;
+    for (size_t i = 0; i < frames.size(); ++i) {
+        std::vector<uint8_t> fctl;
+        put_u32(fctl, seq++);
+        put_u32(fctl, static_cast<uint32_t>(w));
+        put_u32(fctl, static_cast<uint32_t>(h));
+        put_u32(fctl, 0);                       // x offset
+        put_u32(fctl, 0);                       // y offset
+        // Delay as an exact rational: 1/fps of a second.
+        fctl.push_back(0); fctl.push_back(1);                          // delay_num = 1
+        fctl.push_back(static_cast<uint8_t>((fps >> 8) & 0xFF));       // delay_den = fps
+        fctl.push_back(static_cast<uint8_t>(fps & 0xFF));
+        fctl.push_back(0);   // dispose_op = NONE
+        fctl.push_back(0);   // blend_op   = SOURCE
+        put_chunk(png, "fcTL", fctl);
+
+        const std::vector<uint8_t> z = encode_image_data(frames[i], w, h);
+        if (i == 0) {
+            put_chunk(png, "IDAT", z);
+        } else {
+            std::vector<uint8_t> fdat;
+            put_u32(fdat, seq++);
+            fdat.insert(fdat.end(), z.begin(), z.end());
+            put_chunk(png, "fdAT", fdat);
+        }
+    }
+
+    put_chunk(png, "IEND", {});
+    return write_file(path, png);
 }
 
 bool write_ppm(const std::string& path, const std::vector<uint8_t>& rgb, int w, int h) {
