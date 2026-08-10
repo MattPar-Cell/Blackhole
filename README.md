@@ -248,8 +248,16 @@ than by count − 1, so the last frame does not duplicate the first and the loop
 is seamless; a camera sweep is not periodic and does reach its endpoint exactly.
 
 Cost is the obvious catch: a 10-second film is 240 renders. The settings above
-take roughly 20 minutes on four cores. Keep `--spp 1` and a small `--width`
-while you find the shot.
+take roughly 15 minutes each on four cores. Keep `--spp 1` and a small
+`--width` while you find the shot. The two APNGs above are 8 MB and 12 MB —
+every frame is a full keyframe, since APNG has no inter-frame prediction. If
+size matters, write a PNG sequence and let ffmpeg do proper video compression.
+
+One check worth mentioning, because it validates the whole time pipeline at
+once: the hot-spot film covers exactly two orbits in 240 frames, so the period
+is exactly 120 frames — and frames 0 and 120 come out **byte-identical**, as do
+30 and 150. Frame 239 differs from frame 0 by about as much as frame 1 does, so
+the loop is seamless with no duplicated frame.
 
 ---
 
