@@ -1,0 +1,4 @@
+*.o
+blackhole
+build/
+*.ppm
