@@ -2,6 +2,7 @@
 #   make          build
 #   make test     build and run the physics validation suite
 #   make images   render the 20 stills in gallery/ (slow: ~3 h, 8 are 4K)
+#   make stars    render the neutron star stills in gallery/
 #   make videos   render the sample films in video/ (slow: ~30 min)
 
 CXX      ?= g++
@@ -71,6 +72,28 @@ images: $(BIN)
 	./$(BIN) --preset stellar --sun --width 1600 --height 900 --spp 2 \
 		--out gallery/sun-vs-stellar.png
 
+# Neutron stars.  Mass and radius come from a TOV solve of the chosen equation
+# of state, so the only inputs are the physics.
+stars: $(BIN)
+	@mkdir -p gallery
+	./$(BIN) --neutron-star --log-decades 18 --stars 500000 --inclination 70 \
+		--width 3840 --height 2160 --spp 2 --out gallery/ns-quiet.png
+	./$(BIN) --neutron-star --ns-spin 400 --caps --cap-tilt 60 \
+		--log-decades 18 --stars 500000 --inclination 70 \
+		--width 3840 --height 2160 --spp 2 --out gallery/ns-pulsar.png
+	./$(BIN) --neutron-star --ns-spin 700 --caps --cap-tilt 75 --cap-temp 4e6 \
+		--log-decades 18 --stars 500000 --inclination 85 \
+		--width 3840 --height 2160 --spp 2 --out gallery/ns-millisecond.png
+	./$(BIN) --neutron-star --eos ms1 --log-decades 18 --stars 500000 --inclination 70 \
+		--width 1920 --height 1080 --spp 2 --out gallery/ns-stiff.png
+	./$(BIN) --neutron-star --ns-mass 2.05 --log-decades 18 --stars 500000 --inclination 70 \
+		--width 1920 --height 1080 --spp 2 --out gallery/ns-heavy.png
+	./$(BIN) --neutron-star --caps --cap-tilt 10 --cap-radius 30 \
+		--log-decades 18 --stars 500000 --inclination 20 \
+		--width 1920 --height 1080 --spp 2 --out gallery/ns-poleon.png
+	./$(BIN) --neutron-star --log-decades 18 --stars 500000 --distance 25 --fov 120 \
+		--width 1920 --height 1080 --spp 3 --out gallery/ns-closeup.png
+
 # Each film is 240 renders, so this takes roughly half an hour on four cores.
 videos: $(BIN)
 	@mkdir -p video
@@ -86,4 +109,4 @@ videos: $(BIN)
 clean:
 	rm -f $(OBJ) $(BIN)
 
-.PHONY: all test images videos clean
+.PHONY: all test images stars videos clean

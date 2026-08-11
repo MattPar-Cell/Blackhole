@@ -177,6 +177,145 @@ Sun, and the program says so rather than quietly cheating the scale.
 
 ---
 
+## Neutron stars
+
+A neutron star is a *body*, not a hole, and that changes the physics entirely.
+It has an interior, and the interior is what sets everything else.
+
+### Structure: the TOV equation
+
+Einstein's field equations, for a static sphere of perfect fluid, reduce to the
+Tolman–Oppenheimer–Volkoff equation:
+
+$$\frac{dP}{dr} = -\,\frac{G\left(\rho + P/c^2\right)\left(m + 4\pi r^3 P/c^2\right)}{r^2\left(1 - 2Gm/rc^2\right)}, \qquad \frac{dm}{dr} = 4\pi r^2\rho$$
+
+Every departure from Newtonian hydrostatics is visible in that first equation:
+**pressure itself gravitates** (the $P/c^2$ terms), and the denominator runs
+away as the star approaches its own Schwarzschild radius. Both push the same
+way — towards collapse. That is why a relativistic star has a *maximum mass* at
+all, and why no equation of state can escape one.
+
+Nothing about a star's size is typed in here. You choose an equation of state
+and a mass; the radius is whatever hydrostatic equilibrium gives:
+
+```bash
+./blackhole --neutron-star --eos sly --ns-mass 1.4
+./blackhole --eos sly --mass-radius        # the whole mass-radius curve
+```
+
+```
+  central density      9.4726e+17 kg/m^3  =  3.51 x nuclear saturation
+  gravitational mass   1.4000 Msun
+  baryon mass          1.6268 Msun
+  binding energy       4.0533e+46 J  =  0.2268 Msun c^2  (released when it formed)
+  radius               11.1399 km   =  5.3885 GM/c^2
+  compactness r_s/R    0.3712     (Buchdahl's bound is 0.8889)
+  surface redshift z   0.2610
+  surface gravity      1.8881e+12 m/s^2  =  1.925e+11 g
+  max sound speed      0.6255 c   (causality needs < 1)
+  visible surface      79.5% of the total area, from light bending alone
+```
+
+That binding energy is worth pausing on: it is not an input. The star's baryons
+weigh 1.63 M☉ but the star gravitates as 1.40, and the missing 0.23 M☉c² —
+4 × 10⁴⁶ J — is what a supernova sheds in neutrinos. SN 1987A radiated about
+3 × 10⁴⁶ J.
+
+Four equations of state are available, three of them derived from first
+principles so they can be *checked* rather than trusted:
+
+| | validated against |
+|---|---|
+| ideal degenerate neutron gas | the 1939 Oppenheimer–Volkoff limit, **0.7101 M☉** |
+| ideal degenerate electron gas | the Chandrasekhar limit, **1.4253 M☉** |
+| polytrope | the analytic Lane–Emden radius, to 2.6 × 10⁻⁴ |
+| uniform density | the exact interior Schwarzschild solution of 1916 |
+| SLy / MS1 piecewise polytropes | the masses and radii pulsar timing and NICER measure |
+
+The free neutron gas result is the historically important one. With no nuclear
+forces at all, degenerate neutrons top out at 0.71 M☉ — well under the 2.08 M☉
+of PSR J0740+6620. That gap *is* the argument that the strong interaction has
+to be doing most of the work, and it is why the equation of state above nuclear
+density is still an open problem.
+
+### Optics: seeing round the back
+
+By Birkhoff's theorem the exterior of a static spherical star is *exactly*
+Schwarzschild, so the same metric and integrator that draw the black holes
+apply unchanged with $a = 0$.
+
+But the picture is different. There is no horizon, no shadow, and — because the
+surface at 5.4 GM/c² sits outside the photon sphere at 3 GM/c² — no photon ring
+either. What there is instead is enough light bending that a large slice of the
+**far** hemisphere is visible: 79% of the total surface area at once, not 50%.
+
+![Quiet neutron star](gallery/ns-quiet.png)
+
+Rotation is handled the way NICER's pulse-profile modelling does, in its
+Schwarzschild + Doppler form: the metric stays Schwarzschild while the surface
+moves rigidly, which gives the Doppler shift, aberration and beaming of a
+rotating surface. What that leaves out is frame dragging and the mass
+quadrupole of a genuinely rotating star — **Kerr is not the exterior of a
+rotating neutron star**, because its quadrupole moment is not the one a real
+star has. The approximation is good to a few percent below a few hundred hertz
+and degrades for the fastest millisecond pulsars.
+
+Magnetic polar caps are carried round with the star, sampled at the retarded
+time so they appear where they *were* when the light left:
+
+![Pulsar](gallery/ns-pulsar.png)
+
+```bash
+./blackhole --neutron-star --ns-spin 400 --caps --cap-tilt 60 --inclination 70
+```
+
+*One cap faces us at the lower left. The bright sliver on the upper-right limb
+is the **other** cap — on the far side of the star, bent into view. That effect
+is what makes NICER's radius measurements possible: how much of the back you
+can see depends on the compactness, so the shape of the pulse constrains
+$M/R$.*
+
+![Millisecond pulsar](gallery/ns-millisecond.png)
+
+*700 Hz, seen almost edge-on. The equator is moving at 0.18 c, so the
+approaching limb is Doppler-boosted and the receding one dimmed — the same
+beaming that skews the accretion disc of a black hole, on a solid surface.*
+
+| | |
+|---|---|
+| ![Close up](gallery/ns-closeup.png) | ![Pole on](gallery/ns-poleon.png) |
+| **From 25 GM/c².** The star is small in frame, but the sky behind it is wound into concentric arcs — the Milky Way, lensed. | **Nearly pole-on**, with a small magnetic obliquity. Both caps stay in view all the way round, so this geometry barely pulses at all. |
+| ![Stiff EOS](gallery/ns-stiff.png) | ![Heavy](gallery/ns-heavy.png) |
+| **The same 1.4 M☉ with a stiff equation of state (MS1)**: 13.9 km instead of 11.1, and visibly less lensed, because a bigger star is a less compact one. | **2.05 M☉ on SLy**, near the top of what that equation of state can hold: more compact, more strongly lensed, redshift 0.35. |
+
+---
+
+## The night sky
+
+Every render now has a real background: 500 000 stars from the observed
+magnitude distribution, plus the Milky Way at its true surface brightness,
+lensed by whatever is in the foreground.
+
+Making that visible needed a display change, because the contrast is brutal.
+Measured on an actual frame, a neutron star's surface outshines the brightest
+background star in shot by **1.3 × 10⁻¹⁶** — sixteen orders of magnitude. A
+filmic curve puts the sky below black; a pure logarithmic curve spanning
+sixteen decades gives the subject only 7% of the tonal range and returns it as
+featureless white.
+
+The default `hdr` curve keeps the ACES response where the subject is and blends
+a logarithmic floor in underneath, so both survive:
+
+$$\text{out} = f + 0.35\,L\,(1-f), \qquad f = \mathrm{ACES}(x),\; L = \frac{\log_{10}(1+kx)}{\log_{10}(1+k)}$$
+
+It is a display transform and nothing else — the radiance behind it is
+untouched, and `--tonemap aces` gives the old look back. Veiling glare now
+defaults to **off** for the same reason: it is a camera model, and with the sky
+visible it greys the background and softens the shadow rather than flattering
+them.
+
+---
+
 ## Video
 
 There is a constraint here worth stating before the how-to, because it decides
