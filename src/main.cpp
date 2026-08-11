@@ -92,7 +92,8 @@ USAGE
   blackhole [options]
 
 SCENE
-  --preset NAME        sgra | m87 | stellar | gargantua | custom   (default: sgra)
+  --preset NAME        sgra | m87 | ton618 | stellar | gargantua | custom
+                       (default: sgra)
   --mass MSUN          black hole mass in solar masses
   --spin A             dimensionless spin a/M in [-0.9999, 0.9999]
   --distance R         camera distance in gravitational radii GM/c^2
@@ -193,6 +194,28 @@ void apply_preset(Options& o, const std::string& name) {
         o.cfg.disc_r_out = 45.0;
         o.cfg.eddington = 0.1;
         o.inclination_deg = 78.0;
+        o.cfg.cam.fov = 0.55;
+    } else if (name == "ton618") {
+        // TON 618, a hyperluminous quasar at redshift 2.22 and one of the most
+        // massive black holes known: 6.6e10 solar masses, from the width of
+        // its H-beta line (Shemmer et al. 2004).  Its shadow is 0.107 light
+        // years across - 6770 AU, more than a hundred times the width of
+        // Neptune's orbit.  The bolometric luminosity of about 4e40 W puts it
+        // at roughly 5% of Eddington.  Type-1 quasars are seen without the
+        // torus in the way, so the disc is viewed fairly face-on.
+        o.cfg.M_kg = 6.6e10 * phys::M_sun;
+        o.cfg.spin = 0.95;               // sustained accretion spins a hole up
+        o.cfg.cam.r = 130.0;
+        o.cfg.disc_r_out = 30.0;
+        o.cfg.eddington = 0.05;
+        // Its broad emission lines mean our line of sight misses the obscuring
+        // torus, which in the standard picture puts the inclination inside
+        // roughly 45 degrees of the spin axis.  So this is close to the most
+        // edge-on view consistent with seeing it as a type-1 quasar at all -
+        // which is also why it looks like a bright ellipse rather than the
+        // dramatic near-edge-on shape.  --inclination 80 shows the lensing,
+        // but that is not our actual view of this object.
+        o.inclination_deg = 45.0;
         o.cfg.cam.fov = 0.55;
     } else if (name == "gargantua") {
         // A slowly spun-up supermassive hole with a bright, cool disc: the

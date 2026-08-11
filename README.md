@@ -149,6 +149,12 @@ orders of magnitude and no single linear exposure can hold both.*
 the shadow, so the frame has to be wider and the Sun shrinks to a few pixels on
 the right — still at its true relative size.*
 
+![Sun versus a stellar-mass hole](gallery/sun-vs-stellar.png)
+
+*The comparison inverted. Against a 10 M☉ hole the Sun is the giant: 9 000×
+wider, and the black hole is smaller than one pixel. The program says so in its
+report rather than quietly rescaling to make both visible.*
+
 The program prints the numbers too:
 
 ```
@@ -164,6 +170,7 @@ The comparison lands very differently depending on the hole:
 | stellar (X-ray binary) | 10 M☉ | 153 km | Sun is **9 000×** wider |
 | Sagittarius A* | 4.3 × 10⁶ M☉ | 6.6 × 10⁷ km | shadow is **47×** wider |
 | M87* | 6.5 × 10⁹ M☉ | 1.0 × 10¹¹ km | shadow is **72 000×** wider — 667 AU |
+| TON 618 | 6.6 × 10¹⁰ M☉ | 1.0 × 10¹² km | shadow is **728 000×** wider — 6 770 AU, or 0.107 light-years |
 
 For the stellar-mass case the hole is genuinely smaller than a pixel next to the
 Sun, and the program says so rather than quietly cheating the scale.
@@ -351,20 +358,72 @@ Every render also reports its own accuracy:
 
 ## Gallery
 
+All rendered at 1920×1080 (or the stated size) by the code in this repository.
+
+### The four real black holes, to the same recipe
+
 | | |
 |---|---|
-| ![M87](gallery/m87.png) | ![stellar](gallery/stellar.png) |
-| **M87\***, 17° from the spin axis — nearly face-on, so the Doppler asymmetry is weak and the ring is almost round. The orange is a real colour: a few-thousand-kelvin disc. | **Stellar-mass X-ray binary**, 10 M☉ at 0.1 Eddington. The disc peaks at 7 × 10⁶ K, so its emission is X-ray and only the blue Rayleigh–Jeans tail is visible. |
-| ![gargantua](gallery/gargantua.png) | ![sgra](gallery/sgra.png) |
-| **10⁸ M☉ at a = 0.999, seen 3° from edge-on.** The "hump" above the shadow is the *far* side of the disc, lensed up and over the hole; the arc below it is the same far side seen through the underside. | **Sagittarius A\***, 8° from edge-on. The left side is brighter because it is approaching: at the inner disc the beaming contrast is about 8:1. |
+| ![TON 618](gallery/ton618.png) | ![M87](gallery/m87.png) |
+| **TON 618** — 6.6 × 10¹⁰ M☉, the largest here by far. Its shadow is **0.107 light-years** across: 6 770 AU, or 113 times the width of Neptune's orbit. At 45° from the spin axis, about the most edge-on view still consistent with seeing it as a broad-line quasar at all. | **M87\***, 17° from the spin axis. Nearly face-on, so the Doppler asymmetry is weak and the ring is almost round. The orange is a computed colour, not a palette: a few-thousand-kelvin disc. |
+| ![Sgr A*](gallery/sgra.png) | ![stellar](gallery/stellar.png) |
+| **Sagittarius A\***, 8° from edge-on. The left side is brighter because it is approaching — at the inner disc the beaming contrast is about 8:1. | **Stellar-mass X-ray binary**, 10 M☉ at 0.1 Eddington. The disc peaks at 7 × 10⁶ K, so its output is X-ray and only the blue Rayleigh–Jeans tail is visible. |
+
+![TON 618 edge-on](gallery/ton618-edge.png)
+
+*TON 618 seen 10° from edge-on. This is **not** our actual line of sight — at
+this inclination the obscuring torus would hide the broad lines that identify it
+as a quasar — but it is the angle at which the lensing shows itself: the band
+arcing over the shadow is the far side of the disc, bent up and over the hole.*
+
+### One hole, three viewing angles
+
+| | | |
+|---|---|---|
+| ![face on](gallery/face-on.png) | ![inclined](gallery/inclined.png) | ![edge on](gallery/edge-on.png) |
+| **5°** — down the spin axis. A flat ring; no beaming asymmetry, because nothing is moving towards us. | **60°** — the disc tips, the far side starts to lift over the shadow, and the approaching limb brightens. | **90°** — exactly edge-on. The disc itself is a razor line; everything above and below it is lensed light from its far side. |
+
+### Spin
+
+The same hole and disc at four values of *a/M*. Watch the inner edge: the ISCO
+moves from 6M to 1.24M, so the disc reaches further in and gets hotter, and the
+shadow becomes visibly non-circular as frame dragging drags one side of the
+photon ring inward.
+
+| | | | |
+|---|---|---|---|
+| ![a=0](gallery/spin-00.png) | ![a=0.5](gallery/spin-05.png) | ![a=0.9](gallery/spin-09.png) | ![a=0.998](gallery/spin-0998.png) |
+| **a = 0** — Schwarzschild. ISCO 6M, efficiency 5.7%. | **a = 0.5** — ISCO 4.23M, efficiency 8.2%. | **a = 0.9** — ISCO 2.32M, efficiency 15.6%. | **a = 0.998** — the Thorne limit. ISCO 1.24M, efficiency 32%. |
+
+### Two more things the physics does on its own
+
+| | |
+|---|---|
+| ![retrograde](gallery/retrograde.png) | ![photon ring](gallery/photon-ring.png) |
+| **A retrograde disc**, orbiting against the hole's spin. The ISCO retreats to 8.7M, so the inner disc is cooler and dimmer, and the beaming asymmetry flips to the other side. | **Close in on the photon ring.** The thin bright arc hugging the shadow is light that orbited the hole before escaping — the disc, imaged again at higher order. |
+
+### Lensing of the background sky
+
+![lensed starfield](gallery/lensed-starfield.png)
+
+*No disc: just 500 000 stars and the Milky Way, seen through the hole's gravity.
+The Einstein ring, the secondary images inside it, and the shadow's D-shaped
+flattening from frame dragging are all consequences of the traced geodesics.*
+
+![wide field](gallery/wide-field.png)
+
+*From 40 GM/c² with a 110° field of view. This close, the hole lenses a large
+fraction of the whole sky into the ring around it — including the part of the
+sky directly behind the camera.*
 
 ---
+
 
 ## Usage
 
 ```
 SCENE
-  --preset NAME        sgra | m87 | stellar | gargantua | custom
+  --preset NAME        sgra | m87 | ton618 | stellar | gargantua | custom
   --mass MSUN          black hole mass in solar masses
   --spin A             dimensionless spin a/M in [-0.9999, 0.9999]
   --distance R         camera distance in gravitational radii GM/c^2
@@ -428,6 +487,9 @@ Some things worth trying:
 
 # look down the spin axis
 ./blackhole --preset sgra --inclination 5
+
+# TON 618, one of the most massive black holes known
+./blackhole --preset ton618
 ```
 
 A note on `--glare`: it is a camera model, a convolution with a heavy-tailed
@@ -447,8 +509,8 @@ dependency. `.ppm` also works.
 ```bash
 make            # or: cmake -B build && cmake --build build
 make test       # the 40 physics checks
-make images     # regenerate gallery/
-make videos     # regenerate video/  (240 renders each, ~30 min)
+make images     # regenerate gallery/ (20 stills, ~90 min)
+make videos     # regenerate video/  (2 films, ~30 min)
 ```
 
 Needs a C++17 compiler and pthreads. Nothing else. `-ffast-math` is
