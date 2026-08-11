@@ -358,7 +358,15 @@ Every render also reports its own accuracy:
 
 ## Gallery
 
-All rendered at 1920×1080 (or the stated size) by the code in this repository.
+All rendered by the code in this repository. The eight flagship frames are
+**3840 × 2160**; the comparison strips stay at 1280 × 720 because they are shown
+as thumbnails, and the two star-field frames stay at 1920 × 1080 because a sky
+full of isolated bright pixels is high-entropy and quadruples in file size
+without looking meaningfully better.
+
+A note on sampling: 4K at `--spp 2` places samples *closer together* than
+1080p at `--spp 3` — fov/7680 against fov/5760 — so these are better sampled as
+well as larger, at about half the cost of 4K with 9 samples.
 
 ### The four real black holes, to the same recipe
 
@@ -400,7 +408,7 @@ photon ring inward.
 | | |
 |---|---|
 | ![retrograde](gallery/retrograde.png) | ![photon ring](gallery/photon-ring.png) |
-| **A retrograde disc**, orbiting against the hole's spin. The ISCO retreats to 8.7M, so the inner disc is cooler and dimmer, and the beaming asymmetry flips to the other side. | **Close in on the photon ring.** The thin bright arc hugging the shadow is light that orbited the hole before escaping — the disc, imaged again at higher order. |
+| **A retrograde disc**, orbiting against the hole's spin. The ISCO retreats to 8.7M, so the inner disc is cooler and dimmer, and the beaming asymmetry flips to the other side. | **Close in on the photon ring**, at 4K. The thin bright sliver pressed against the shadow's edge — above and below — is light that looped around the hole before escaping: the disc's inner rim, imaged again at higher order. |
 
 ### Lensing of the background sky
 

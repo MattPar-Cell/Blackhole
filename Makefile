@@ -1,7 +1,7 @@
 # Plain make build, for when cmake is not around.
 #   make          build
 #   make test     build and run the physics validation suite
-#   make images   render the 20 stills in gallery/ (slow: ~90 min)
+#   make images   render the 20 stills in gallery/ (slow: ~3 h, 8 are 4K)
 #   make videos   render the sample films in video/ (slow: ~30 min)
 
 CXX      ?= g++
@@ -31,17 +31,20 @@ test: $(BIN)
 
 images: $(BIN)
 	@mkdir -p gallery
-	./$(BIN) --preset ton618    --width 1920 --height 1080 --spp 3 --out gallery/ton618.png
-	./$(BIN) --preset sgra      --width 1920 --height 1080 --spp 3 --out gallery/sgra.png
-	./$(BIN) --preset m87       --width 1440 --height 1080 --spp 2 --out gallery/m87.png
-	./$(BIN) --preset stellar   --width 1920 --height 1080 --spp 2 --out gallery/stellar.png
-	./$(BIN) --preset gargantua --width 1920 --height 1080 --spp 3 --out gallery/gargantua.png
+# The flagship frames are rendered at 4K.  Note that 3840x2160 at --spp 2
+# samples *finer* than 1920x1080 at --spp 3 - the sample spacing is fov/7680
+# against fov/5760 - so this is higher quality as well as bigger.
+	./$(BIN) --preset ton618    --width 3840 --height 2160 --spp 2 --out gallery/ton618.png
+	./$(BIN) --preset sgra      --width 3840 --height 2160 --spp 2 --out gallery/sgra.png
+	./$(BIN) --preset m87       --width 2880 --height 2160 --spp 2 --out gallery/m87.png
+	./$(BIN) --preset stellar   --width 3840 --height 2160 --spp 2 --out gallery/stellar.png
+	./$(BIN) --preset gargantua --width 3840 --height 2160 --spp 2 --out gallery/gargantua.png
 	./$(BIN) --preset ton618 --inclination 80 --fov 30 \
-		--width 1920 --height 1080 --spp 3 --out gallery/ton618-edge.png
+		--width 3840 --height 2160 --spp 2 --out gallery/ton618-edge.png
 	./$(BIN) --preset sgra --inclination 5  --fov 26 \
 		--width 1440 --height 1080 --spp 2 --out gallery/face-on.png
 	./$(BIN) --preset sgra --inclination 60 --fov 30 \
-		--width 1920 --height 1080 --spp 2 --out gallery/inclined.png
+		--width 3840 --height 2160 --spp 2 --out gallery/inclined.png
 	./$(BIN) --preset sgra --inclination 90 --fov 30 \
 		--width 1920 --height 1080 --spp 3 --out gallery/edge-on.png
 	./$(BIN) --preset sgra --spin 0.0   --inclination 80 --fov 26 --disc-outer 22 \
@@ -55,7 +58,7 @@ images: $(BIN)
 	./$(BIN) --preset sgra --retrograde --inclination 80 --fov 30 \
 		--width 1920 --height 1080 --spp 2 --out gallery/retrograde.png
 	./$(BIN) --preset sgra --inclination 85 --fov 13 \
-		--width 1920 --height 1080 --spp 3 --out gallery/photon-ring.png
+		--width 3840 --height 2160 --spp 2 --out gallery/photon-ring.png
 	./$(BIN) --preset sgra --no-disc --fov 42 --stars 500000 \
 		--width 1920 --height 1080 --spp 3 --out gallery/lensed-starfield.png
 	./$(BIN) --preset sgra --no-disc --distance 40 --fov 110 --stars 500000 \
