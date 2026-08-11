@@ -141,6 +141,26 @@ std::vector<uint8_t> develop(const Image& im, double exposure, ToneMap tm,
             case ToneMap::ACES:
                 for (double& x : v) x = aces(x);
                 break;
+            case ToneMap::HDR: {
+                // Filmic highlights with a logarithmically lifted shadow floor.
+                //
+                // A pure log curve spanning fifteen decades gives the top two
+                // decades only about 7% of the display range, so a bright
+                // surface comes out as featureless white.  A pure filmic curve
+                // keeps that surface but drops the night sky below black.  This
+                // keeps the ACES response where the subject is and blends in a
+                // log term underneath it, so a 10^6 K neutron star and a sixth
+                // magnitude star can share a frame.  It is a display transform
+                // and nothing more - the radiance behind it is untouched.
+                const double denom = std::log10(1.0 + log_k);
+                for (double& x : v) {
+                    const double f = aces(x);
+                    const double l = std::clamp(
+                        std::log10(1.0 + log_k * std::max(x, 0.0)) / denom, 0.0, 1.0);
+                    x = std::clamp(f + 0.35 * l * (1.0 - f), 0.0, 1.0);
+                }
+                break;
+            }
             case ToneMap::Log: {
                 // Wide-latitude curve, in the spirit of a long astrophotographic
                 // exposure: many decades of radiance compressed onto the display

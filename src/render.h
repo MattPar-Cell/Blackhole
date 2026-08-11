@@ -3,6 +3,7 @@
 
 #include "disc.h"
 #include "scene.h"
+#include "neutronstar.h"
 #include "image.h"
 
 #include <memory>
@@ -31,6 +32,7 @@ struct RenderConfig {
     bool  sun_enabled = false;
     SunBody sun;
     HotSpot hotspot;
+    NeutronStar star;
 
     // Observer coordinate time of this frame, in GM/c^3.  Only matters when
     // something in the scene is time-dependent; a bare Novikov-Thorne disc is
@@ -54,11 +56,13 @@ struct RenderStats {
     long long captured = 0;
     long long disc_hits = 0;
     long long sun_hits = 0;
+    long long star_hits = 0;
     long long escaped = 0;
     long long exhausted = 0;
     double max_norm_error = 0.0;       // worst |g^{ab} p_a p_b| along any ray
     double max_carter_drift = 0.0;     // worst relative drift of Carter's Q
     double seconds = 0.0;
+    double total_flux = 0.0;   // summed image luminance, for pulse profiles
 };
 
 // Trace the whole frame.  Returns absolute radiance in CIE XYZ.

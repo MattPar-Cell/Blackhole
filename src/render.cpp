@@ -34,7 +34,7 @@ double redshift_factor(const State& y, const std::array<double, 4>& u) {
 }
 
 struct Hit {
-    enum class What { Horizon, Disc, Sun, Sky, Exhausted } what = What::Exhausted;
+    enum class What { Horizon, Disc, Sun, Star, Sky, Exhausted } what = What::Exhausted;
     State y{};
 };
 
@@ -89,6 +89,21 @@ static Hit trace(const RenderConfig& cfg, const NovikovThorneDisc* disc,
             local.max_norm_error = std::max(local.max_norm_error, std::fabs(iv.norm_rel));
             local.max_carter_drift =
                 std::max(local.max_carter_drift, std::fabs(iv.Q - iv0.Q) / Q0);
+        }
+
+        // --- event: the neutron star surface ----------------------------------
+        // There is no horizon to fall through: light stops here.  The surface
+        // is a sphere of constant Schwarzschild r, so the crossing is found by
+        // bisecting r on the dense-output polynomial.
+        if (cfg.star.enabled && ynew[Y_R] <= cfg.star.R) {
+            double lo = 0.0, hi = 1.0;
+            for (int k = 0; k < 60; ++k) {
+                const double mid = 0.5 * (lo + hi);
+                if (dense.eval(mid)[Y_R] <= cfg.star.R) hi = mid; else lo = mid;
+            }
+            hit.what = Hit::What::Star;
+            hit.y = dense.eval(0.5 * (lo + hi));
+            return hit;
         }
 
         // --- event: swallowed by the hole -------------------------------------
@@ -242,6 +257,37 @@ static spec::XYZ shade(const RenderConfig& cfg, const NovikovThorneDisc* disc,
             return c;
         }
 
+        case Hit::What::Star: {
+            ++local.star_hits;
+            const NeutronStar& st = cfg.star;
+            const double r = hit.y[Y_R], th = hit.y[Y_TH], ph = hit.y[Y_PH];
+
+            // The surface rotates rigidly; its four-velocity carries the
+            // Doppler shift, aberration and beaming all at once.
+            const std::array<double, 4> u = st.surface_four_velocity(th);
+            const double ku = hit.y[Y_PT] * u[0] + hit.y[Y_PPH] * u[3];
+            if (!(ku > 1e-12)) return {0.0, 0.0, 0.0};
+            const double g = 1.0 / ku;
+
+            // Where the caps were when the light left, not where they are now.
+            const double t_emit = cfg.observer_time + hit.y[Y_T];
+            const double T_local = st.temperature_at(th, ph, t_emit);
+
+            // Angle to the local normal, in the frame of the moving surface.
+            // The radial leg of the tetrad is unaffected by a purely azimuthal
+            // boost, so it is the static one: e_(r)^mu = (0, sqrt(1-2M/r),0,0).
+            const double f = 1.0 - 2.0 / r;
+            const double mu = (f > 0.0)
+                ? std::clamp(-hit.y[Y_PR] * std::sqrt(f) / ku, 0.0, 1.0)
+                : 1.0;
+            // Eddington grey atmosphere, the same law as the solar photosphere.
+            const double limb = (2.0 + 3.0 * mu) / 5.0;
+
+            spec::XYZ c = spec::blackbody_xyz(g * T_local);
+            c.x *= limb; c.y *= limb; c.z *= limb;
+            return c;
+        }
+
         case Hit::What::Sky: {
             ++local.escaped;
             if (!stars) return {0.0, 0.0, 0.0};
@@ -325,6 +371,7 @@ img::Image render(const RenderConfig& cfg, RenderStats& stats) {
                 }
                 const double w = 1.0 / (S * S);
                 image.at(x, y) = {acc.x * w, acc.y * w, acc.z * w};
+                local.total_flux += acc.y * w;
             }
 
             const int done = rows_done.fetch_add(1) + 1;
@@ -349,6 +396,8 @@ img::Image render(const RenderConfig& cfg, RenderStats& stats) {
         stats.captured += s.captured;
         stats.disc_hits += s.disc_hits;
         stats.sun_hits += s.sun_hits;
+        stats.star_hits += s.star_hits;
+        stats.total_flux += s.total_flux;
         stats.escaped += s.escaped;
         stats.exhausted += s.exhausted;
         stats.max_norm_error = std::max(stats.max_norm_error, s.max_norm_error);

@@ -12,6 +12,8 @@
 #include "kerr.h"
 #include "geodesic.h"
 #include "disc.h"
+#include "tov.h"
+#include "neutronstar.h"
 #include "spectrum.h"
 #include "constants.h"
 
@@ -1015,6 +1017,314 @@ void test_physical_scales() {
     }
 }
 
+// ===========================================================================
+// Neutron stars
+// ===========================================================================
+
+void test_degenerate_matter() {
+    section("10. Degenerate matter: the equation of state");
+
+    char buf[240];
+
+    // The Fermi gas expressions must be thermodynamically consistent:
+    // d(eps)/dn = mu and P = mu n - eps.  Neither is imposed; both follow from
+    // the integrals over the filled Fermi sphere, so agreement is a real check
+    // that the closed forms were derived correctly.
+    {
+        ns::IdealFermiGas g = ns::neutron_gas();
+        double worst_mu = 0.0, worst_P = 0.0;
+        for (double x = 0.01; x < 20.0; x *= 1.5) {
+            const double h = 1e-6 * x;
+            const double dn = g.number_density(x + h) - g.number_density(x - h);
+            const double de = (g.density_of_x(x + h) - g.density_of_x(x - h)) *
+                              phys::c * phys::c;
+            const double mu_num = de / dn;
+            const double mu_ana = g.chemical_potential(x);
+            worst_mu = std::max(worst_mu, std::fabs(mu_num - mu_ana) / mu_ana);
+
+            const double P_thermo = mu_ana * g.number_density(x) -
+                                    g.density_of_x(x) * phys::c * phys::c;
+            worst_P = std::max(worst_P,
+                               std::fabs(P_thermo - g.pressure_of_x(x)) / g.pressure_of_x(x));
+        }
+        std::snprintf(buf, sizeof buf, "max relative error = %.2e", worst_mu);
+        check("Fermi gas satisfies d(energy)/d(number) = mu", worst_mu < 1e-6, buf);
+        // At low x the pressure is O(x^5) while mu n and epsilon are both
+        // O(x^3), so forming their difference in double precision loses about
+        // four digits.  That is arithmetic, not physics.
+        std::snprintf(buf, sizeof buf,
+                      "max relative error = %.2e (cancellation-limited at small x)", worst_P);
+        check("Fermi gas satisfies P = mu n - epsilon", worst_P < 1e-6, buf);
+    }
+
+    // Non-relativistic and ultra-relativistic limits, P ~ n^{5/3} and n^{4/3}.
+    {
+        ns::IdealFermiGas g = ns::neutron_gas();
+        auto slope = [&](double x) {
+            const double h = 0.01 * x;
+            return (std::log(g.pressure_of_x(x + h)) - std::log(g.pressure_of_x(x - h))) /
+                   (std::log(g.number_density(x + h)) - std::log(g.number_density(x - h)));
+        };
+        const double nr = slope(0.02), ur = slope(500.0);
+        std::snprintf(buf, sizeof buf,
+                      "d ln P / d ln n = %.4f at x = 0.02, %.4f at x = 500", nr, ur);
+        check("degenerate gas stiffens from Gamma = 5/3 to 4/3",
+              std::fabs(nr - 5.0 / 3.0) < 2e-3 && std::fabs(ur - 4.0 / 3.0) < 2e-3, buf);
+    }
+}
+
+void test_tov() {
+    section("11. Neutron star structure: the TOV equation");
+
+    char buf[260];
+
+    // The one case with a closed-form solution.  For constant density the TOV
+    // equation integrates to the interior Schwarzschild metric of 1916.  Seed
+    // the solver with the analytic central pressure for a chosen radius and it
+    // should integrate back out to exactly that radius and mass.
+    {
+        const double rho = 5.0e17;
+        const double R_target = 12000.0;
+        const double Pc = ns::interior_schwarzschild_pressure(rho, R_target, 0.0);
+        ns::UniformDensity ud(rho, Pc);
+        const ns::Star st = ns::solve_tov(ud, rho, 1e-12);
+        const double M_exact = (4.0 / 3.0) * M_PI * R_target * R_target * R_target * rho;
+
+        std::snprintf(buf, sizeof buf,
+                      "integrated R = %.4f km (exact %.4f), M = %.6f Msun (exact %.6f)",
+                      st.R_km(), R_target / 1000.0, st.M_solar(), M_exact / phys::M_sun);
+        check("uniform-density star reproduces interior Schwarzschild",
+              close(st.R, R_target, 1e-4) && close(st.M, M_exact, 1e-4), buf);
+    }
+
+    // Buchdahl's bound: no static star of any equation of state can be more
+    // compact than 8/9, because the central pressure would have to be infinite.
+    {
+        double worst = 0.0;
+        for (double lp : {34.0, 34.4, 34.9}) {
+            ns::PiecewisePolytrope e(lp, 3.0, 3.0, 3.0, "test");
+            const ns::MassRadiusCurve cv = ns::mass_radius_curve(e, 3e17, 6e18, 30);
+            for (const ns::Star& st : cv.stars) worst = std::max(worst, st.compactness);
+        }
+        std::snprintf(buf, sizeof buf, "max compactness found = %.4f, bound is %.4f",
+                      worst, ns::kBuchdahlCompactness);
+        check("every solution respects Buchdahl's bound r_s/R < 8/9",
+              worst < ns::kBuchdahlCompactness, buf);
+    }
+
+    // The Oppenheimer-Volkoff limit.  Free neutrons with no interactions at
+    // all give a maximum mass well below what pulsars actually weigh - which
+    // is precisely the 1939 result, and the reason nuclear forces have to
+    // matter.
+    {
+        ns::IdealFermiGas g = ns::neutron_gas();
+        const ns::MassRadiusCurve cv = ns::mass_radius_curve(g, 1e17, 5e19, 80);
+        std::snprintf(buf, sizeof buf,
+                      "M_max = %.4f Msun at R = %.2f km  (Oppenheimer & Volkoff: 0.71)",
+                      cv.M_max_solar(), cv.max_mass.R_km());
+        check("free neutron gas reproduces the 0.71 Msun OV limit",
+              std::fabs(cv.M_max_solar() - 0.71) < 0.02, buf);
+    }
+
+    // The Chandrasekhar limit.  The Newtonian value for mu_e = 2 is
+    // 1.456 Msun; general relativity destabilises the star slightly and pulls
+    // the maximum down by a couple of percent, which the TOV solve should show.
+    {
+        ns::IdealFermiGas g = ns::electron_gas(2.0);
+        const ns::MassRadiusCurve cv = ns::mass_radius_curve(g, 1e9, 1e15, 80);
+        std::snprintf(buf, sizeof buf,
+                      "M_max = %.4f Msun (Newtonian limit 1.456, GR lowers it)",
+                      cv.M_max_solar());
+        check("degenerate electrons reproduce the Chandrasekhar mass",
+              cv.M_max_solar() > 1.38 && cv.M_max_solar() < 1.46, buf);
+    }
+
+    // Newtonian limit: a Gamma = 2 polytrope has the analytic Lane-Emden
+    // solution theta = sin(xi)/xi, so its radius is R = pi sqrt(K / (2 pi G))
+    // and - remarkably - does not depend on the mass at all.
+    {
+        const double K = 1.0e6, G2 = 2.0;
+        ns::Polytrope p(K, G2);
+        const double R_exact = M_PI * std::sqrt(K / (2.0 * M_PI * phys::G));
+        // The Lane-Emden solution is Newtonian, so the comparison is only
+        // meaningful where P << rho c^2, i.e. K rho << c^2.  With K = 1e6 that
+        // means densities well below 1e10; at 3e10 the star is already
+        // relativistic enough that general relativity shrinks it by a third,
+        // which is a real effect rather than an error.
+        double worst = 0.0;
+        for (double rho_c : {1.0e6, 3.0e6, 1.0e7}) {
+            const ns::Star st = ns::solve_tov(p, rho_c, 1e-14);
+            if (!st.ok) continue;
+            worst = std::max(worst, std::fabs(st.R - R_exact) / R_exact);
+        }
+        const ns::Star rel = ns::solve_tov(p, 3.0e10, 1e-14);
+        std::snprintf(buf, sizeof buf,
+                      "Newtonian R = %.1f km vs Lane-Emden %.1f km (err %.2e); at 3e10 GR gives %.1f km",
+                      ns::solve_tov(p, 3.0e6, 1e-14).R / 1000.0, R_exact / 1000.0, worst,
+                      rel.R / 1000.0);
+        check("Gamma = 2 polytrope matches the Lane-Emden radius", worst < 3e-3, buf);
+    }
+
+    // Causality and the observed two-solar-mass pulsars.
+    {
+        ns::PiecewisePolytrope sly = ns::eos_sly();
+        const ns::MassRadiusCurve cv = ns::mass_radius_curve(sly, 3e17, 5e18, 60);
+        const ns::Star s14 = ns::star_of_mass(sly, 1.4 * phys::M_sun);
+        std::snprintf(buf, sizeof buf,
+                      "M_max = %.3f Msun; PSR J0740+6620 weighs 2.08 +/- 0.07",
+                      cv.M_max_solar());
+        check("SLy supports the heaviest pulsars measured",
+              cv.M_max_solar() > 2.0, buf);
+        std::snprintf(buf, sizeof buf,
+                      "R(1.4 Msun) = %.2f km; NICER measures 12.4 +1.3/-1.0 km for J0740",
+                      s14.R_km());
+        check("SLy radius sits in the NICER range",
+              s14.R_km() > 10.5 && s14.R_km() < 13.5, buf);
+        // Causality holds comfortably through a typical star.  At the very
+        // top of the mass range the piecewise-polytrope *fit* creeps just past
+        // c - an artefact of representing a tabulated equation of state by
+        // power laws with Gamma near 3, not a property of SLy itself.  Worth
+        // reporting rather than hiding.
+        std::snprintf(buf, sizeof buf,
+                      "%.4f c in a 1.4 Msun star (%.4f c at the maximum mass, where the fit strains)",
+                      s14.max_sound_speed, cv.max_mass.max_sound_speed);
+        check("sound speed stays below c through a typical star",
+              s14.max_sound_speed < 1.0, buf);
+        std::snprintf(buf, sizeof buf,
+                      "binding energy = %.4f Msun c^2 = %.3e J (SN 1987A radiated ~3e46 J)",
+                      s14.binding_energy / (phys::M_sun * phys::c * phys::c),
+                      s14.binding_energy);
+        check("binding energy matches supernova neutrino energetics",
+              s14.binding_energy > 1e46 && s14.binding_energy < 1e47, buf);
+    }
+
+    // A stiffer equation of state must give both a bigger star and a higher
+    // maximum mass.  That monotonicity is the whole reason a measured radius
+    // constrains nuclear physics.
+    {
+        ns::PiecewisePolytrope sly = ns::eos_sly(), ms1 = ns::eos_stiff();
+        const ns::Star a = ns::star_of_mass(sly, 1.4 * phys::M_sun);
+        const ns::Star b = ns::star_of_mass(ms1, 1.4 * phys::M_sun);
+        const double Ma = ns::mass_radius_curve(sly, 3e17, 5e18, 40).M_max_solar();
+        const double Mb = ns::mass_radius_curve(ms1, 3e17, 5e18, 40).M_max_solar();
+        std::snprintf(buf, sizeof buf,
+                      "soft: R = %.2f km, M_max = %.2f;  stiff: R = %.2f km, M_max = %.2f",
+                      a.R_km(), Ma, b.R_km(), Mb);
+        check("a stiffer equation of state gives larger, heavier stars",
+              b.R_km() > a.R_km() && Mb > Ma, buf);
+    }
+}
+
+void test_neutron_star_optics() {
+    section("12. Neutron star optics: seeing round the back");
+
+    char buf[280];
+
+    // For a surface at R the light bending is strong enough to show a large
+    // part of the far hemisphere.  Trace rays at increasing impact parameter,
+    // find the largest one that still lands on the surface, and read off the
+    // colatitude it lands at.  Compare with an exact quadrature of
+    // dpsi/dr for the grazing ray, and with Beloborodov's approximation.
+    for (double R : {5.0, 6.0, 8.0}) {
+        const double a = 0.0;
+        const double r0 = 1.0e5;
+        const bh::Geom g = bh::geom_at(a, r0, M_PI / 2);
+        const bh::Tetrad tet = bh::zamo_tetrad(g);
+
+        // Does a ray aimed with this impact parameter reach the surface, and
+        // if so at what azimuth?
+        auto trace_to_surface = [&](double b, double* phi_hit) {
+            const double alpha = std::asin(std::clamp(
+                b * std::sqrt(1.0 - 2.0 / r0) / r0, -1.0, 1.0));
+            const double dir[3] = {-std::cos(alpha), 0.0, std::sin(alpha)};
+            bh::State y = bh::make_photon(a, r0, M_PI / 2, 0.0, tet, dir, true);
+            bh::Stepper st(a, 1e-12, 1e-14);
+            st.reset();
+            double h = 1.0;
+            bh::State yn{};
+            bh::DenseSegment seg;
+            for (int i = 0; i < 400000; ++i) {
+                int tries = 0;
+                while (!st.try_step(y, h, yn, seg)) if (++tries > 60) return false;
+                if (h > 0.02 * yn[bh::Y_R]) h = 0.02 * yn[bh::Y_R];
+                if (yn[bh::Y_R] <= R) {
+                    double lo = 0.0, hi = 1.0;
+                    for (int k = 0; k < 60; ++k) {
+                        const double mid = 0.5 * (lo + hi);
+                        if (seg.eval(mid)[bh::Y_R] <= R) hi = mid; else lo = mid;
+                    }
+                    if (phi_hit) *phi_hit = std::fabs(seg.eval(0.5 * (lo + hi))[bh::Y_PH]);
+                    return true;
+                }
+                if (yn[bh::Y_R] > 2.0 * r0) return false;
+                y = yn;
+            }
+            return false;
+        };
+
+        // Largest impact parameter that still hits.
+        double lo = 0.0, hi = 3.0 * R;
+        for (int i = 0; i < 60; ++i) {
+            const double mid = 0.5 * (lo + hi);
+            double dummy;
+            if (trace_to_surface(mid, &dummy)) lo = mid; else hi = mid;
+        }
+        double psi = 0.0;
+        trace_to_surface(lo, &psi);
+
+        const double b_analytic = R / std::sqrt(1.0 - 2.0 / R);
+        const double psi_exact = bh::max_visible_angle_exact(R);
+        const double cos_bel = 1.0 - 1.0 / (1.0 - 2.0 / R);
+        const double psi_bel = std::acos(std::clamp(cos_bel, -1.0, 1.0));
+
+        std::snprintf(buf, sizeof buf,
+                      "R = %.1f M: b_max = %.5f vs R/sqrt(1-r_s/R) = %.5f", R, lo, b_analytic);
+        check("apparent size is set by the critical impact parameter",
+              close(lo, b_analytic, 2e-4), buf);
+
+        std::snprintf(buf, sizeof buf,
+                      "R = %.1f M: traced %.3f deg, quadrature %.3f deg, Beloborodov %.3f deg",
+                      R, psi * 180 / M_PI, psi_exact * 180 / M_PI, psi_bel * 180 / M_PI);
+        check("last visible point matches the exact quadrature",
+              close(psi, psi_exact, 3e-3), buf);
+    }
+
+    // Visible fraction and surface redshift for a real star.
+    {
+        ns::PiecewisePolytrope sly = ns::eos_sly();
+        const ns::Star st = ns::star_of_mass(sly, 1.4 * phys::M_sun);
+        bh::NeutronStar S;
+        S.set_from(st);
+        const double z_direct = 1.0 / std::sqrt(1.0 - 2.0 / S.R) - 1.0;
+        std::snprintf(buf, sizeof buf,
+                      "R = %.3f GM/c^2: %.1f%% of the surface visible, z = %.4f",
+                      S.R, 100.0 * S.visible_fraction(), z_direct);
+        check("more than half the surface is visible",
+              S.visible_fraction() > 0.7 && S.visible_fraction() < 0.9 &&
+              close(z_direct, st.redshift, 1e-9), buf);
+    }
+
+    // A rigidly rotating surface must still have a properly normalised
+    // four-velocity in the Schwarzschild metric.
+    {
+        bh::NeutronStar S;
+        S.R = 5.5;
+        S.M_kg = 1.4 * phys::M_sun;
+        S.set_spin(600.0);
+        double worst = 0.0;
+        for (double th : {0.2, 0.7, M_PI / 2, 2.4}) {
+            const auto u = S.surface_four_velocity(th);
+            const auto ml = bh::metric_lower(0.0, S.R, th);
+            const double n = ml.tt * u[0] * u[0] + ml.pp * u[3] * u[3];
+            worst = std::max(worst, std::fabs(n + 1.0));
+        }
+        std::snprintf(buf, sizeof buf,
+                      "max |u.u + 1| = %.2e at %.0f Hz, equatorial speed %.4f c",
+                      worst, S.spin_hz, S.equatorial_speed());
+        check("rotating surface four-velocity is normalised", worst < 1e-12, buf);
+    }
+}
+
 } // namespace
 
 int run_validation() {
@@ -1032,6 +1342,9 @@ int run_validation() {
     test_radiometry();
     test_relativistic_beaming();
     test_physical_scales();
+    test_degenerate_matter();
+    test_tov();
+    test_neutron_star_optics();
 
     std::printf("\n================================================================\n");
     std::printf("  %d passed, %d failed\n", g_pass, g_fail);

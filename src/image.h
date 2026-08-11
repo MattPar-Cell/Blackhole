@@ -13,7 +13,7 @@
 
 namespace img {
 
-enum class ToneMap { Linear, Reinhard, ACES, Log };
+enum class ToneMap { Linear, Reinhard, ACES, Log, HDR };
 
 struct Image {
     int width = 0, height = 0;

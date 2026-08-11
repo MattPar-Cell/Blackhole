@@ -26,7 +26,17 @@ inline constexpr double h_planck   = 6.62607015e-34;   // J s     (exact)
 inline constexpr double k_B        = 1.380649e-23;     // J K^-1  (exact)
 inline constexpr double sigma_SB   = 5.670374419e-8;   // W m^-2 K^-4
 inline constexpr double sigma_T    = 6.6524587321e-29; // m^2, Thomson cross-section
-inline constexpr double m_p        = 1.67262192369e-27;// kg
+inline constexpr double m_p        = 1.67262192369e-27;// kg, proton
+inline constexpr double m_n        = 1.67492749804e-27;// kg, neutron
+inline constexpr double m_e        = 9.1093837015e-31; // kg, electron
+inline constexpr double m_u        = 1.66053906660e-27;// kg, atomic mass unit
+inline constexpr double eV         = 1.602176634e-19;  // J (exact)
+inline constexpr double MeV        = 1.0e6 * eV;
+
+// Nuclear saturation density: the density of matter inside a heavy nucleus,
+// about 0.16 baryons per cubic femtometre.  Neutron star cores run at a few
+// times this.
+inline constexpr double rho_nuclear = 2.7e17;          // kg m^-3
 
 // ---- Solar / astronomical (IAU 2015 nominal values) ------------------------
 inline constexpr double M_sun      = 1.98847e30;       // kg

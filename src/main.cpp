@@ -2,6 +2,9 @@
 
 #include "render.h"
 #include "constants.h"
+#include "tov.h"
+
+#include <memory>
 
 #include <cstdio>
 #include <cstdlib>
@@ -19,10 +22,10 @@ namespace {
 struct Options {
     bh::RenderConfig cfg;
     std::string out = "blackhole.png";
-    img::ToneMap tonemap = img::ToneMap::ACES;
+    img::ToneMap tonemap = img::ToneMap::HDR;
     double exposure = 0.0;          // 0 = auto
-    double glare = 0.12;
-    double log_decades = 6.0;
+    double glare = 0.0;
+    double log_decades = 16.0;
     double glare_radius = 3.0;
     bool run_tests = false;
     bool ppm = false;
@@ -42,10 +45,32 @@ struct Options {
     std::string frame_pattern;      // printf pattern for a PNG sequence
     double time_span = 0.0;         // coordinate time covered, in GM/c^3
 
+    // Neutron star
+    bool   ns_mode = false;
+    std::string eos_name = "sly";
+    double ns_mass = 1.4;           // solar masses
+    double ns_temp = 1.0e6;         // K
+    double ns_spin = 0.0;           // Hz
+    bool   ns_caps = false;
+    double ns_cap_tilt = 60.0;      // degrees
+    double ns_cap_radius = 20.0;    // degrees
+    double ns_cap_temp = 3.0e6;     // K
+    bool   ns_curve = false;        // print the mass-radius curve and exit
+    ns::Star ns_star_solved;        // result of the TOV solve
+
     double sun_distance = 0.0;      // 0 = auto placement
     double inclination_deg = 85.0;
     std::string preset = "sgra";
 };
+
+std::unique_ptr<ns::EOS> make_eos(const std::string& name) {
+    if (name == "sly")           return std::make_unique<ns::PiecewisePolytrope>(ns::eos_sly());
+    if (name == "ms1")           return std::make_unique<ns::PiecewisePolytrope>(ns::eos_stiff());
+    if (name == "neutron-gas")   return std::make_unique<ns::IdealFermiGas>(ns::neutron_gas());
+    if (name == "electron-gas")  return std::make_unique<ns::IdealFermiGas>(ns::electron_gas());
+    std::fprintf(stderr, "error: unknown equation of state '%s'\n", name.c_str());
+    std::exit(2);
+}
 
 // Interpolate the camera and the clock to fraction u in [0, 1] of the sequence.
 void set_frame(const Options& o, bh::RenderConfig& fc, double u) {
@@ -61,6 +86,7 @@ void accumulate(bh::RenderStats& a, const bh::RenderStats& b) {
     a.rays += b.rays; a.steps += b.steps; a.captured += b.captured;
     a.disc_hits += b.disc_hits; a.sun_hits += b.sun_hits;
     a.escaped += b.escaped; a.exhausted += b.exhausted;
+    a.star_hits += b.star_hits; a.total_flux += b.total_flux;
     a.seconds += b.seconds;
     a.max_norm_error = std::max(a.max_norm_error, b.max_norm_error);
     a.max_carter_drift = std::max(a.max_carter_drift, b.max_carter_drift);
@@ -71,8 +97,12 @@ void print_stats(const Options& o, const bh::RenderStats& stats, double exposure
                 stats.seconds, static_cast<double>(stats.rays),
                 static_cast<double>(stats.steps),
                 stats.rays ? static_cast<double>(stats.steps) / stats.rays : 0.0);
-    std::printf("  captured by the hole  %5.1f%%\n", 100.0 * stats.captured / std::max(1LL, stats.rays));
-    std::printf("  hit the disc          %5.1f%%\n", 100.0 * stats.disc_hits / std::max(1LL, stats.rays));
+    if (o.ns_mode) {
+        std::printf("  hit the surface       %5.1f%%\n", 100.0 * stats.star_hits / std::max(1LL, stats.rays));
+    } else {
+        std::printf("  captured by the hole  %5.1f%%\n", 100.0 * stats.captured / std::max(1LL, stats.rays));
+        std::printf("  hit the disc          %5.1f%%\n", 100.0 * stats.disc_hits / std::max(1LL, stats.rays));
+    }
     if (o.cfg.sun_enabled)
         std::printf("  hit the Sun           %5.1f%%\n", 100.0 * stats.sun_hits / std::max(1LL, stats.rays));
     std::printf("  escaped to the sky    %5.1f%%\n", 100.0 * stats.escaped / std::max(1LL, stats.rays));
@@ -112,6 +142,21 @@ THE SUN
                        honestly comparable
   --sun-distance R     place the Sun this far from the hole instead (in GM/c^2)
 
+NEUTRON STAR
+  --neutron-star       render a neutron star instead of a black hole.  Its mass
+                       and radius come from an actual TOV solve of the chosen
+                       equation of state, not from numbers typed in
+  --eos NAME           sly | ms1 | neutron-gas | electron-gas   (default: sly)
+  --ns-mass MSUN       gravitational mass (default 1.4)
+  --ns-temp K          surface effective temperature (default 1e6)
+  --ns-spin HZ         spin frequency; gives Doppler shift and beaming
+  --caps               add magnetic polar caps - this is what makes a pulsar
+  --cap-tilt DEG       magnetic obliquity from the spin axis (default 60)
+  --cap-radius DEG     angular radius of a cap (default 20)
+  --cap-temp K         cap temperature (default 3e6)
+  --mass-radius        print the mass-radius curve for the equation of state
+                       and exit
+
 SKY
   --no-stars           empty background instead of a lensed star field
   --stars N            number of stars (default 250000)
@@ -121,9 +166,16 @@ IMAGE
   --width N  --height N
   --spp N              samples per pixel is N*N (default 2 -> 4 samples)
   --exposure X         exposure multiplier; omit for automatic
-  --tonemap NAME       aces | reinhard | log | linear
-  --glare X            veiling-glare strength in [0,1] (default 0.12)
-  --log-decades N      decades of radiance the "log" curve spans (default 6)
+  --tonemap NAME       hdr | aces | reinhard | log | linear   (default: hdr)
+                       "hdr" keeps a bright subject filmic while lifting the
+                       night sky into view.  It is the default because without
+                       it the background stars, which are up to seventeen
+                       orders of magnitude fainter than an accretion disc or a
+                       neutron star surface, fall below black
+  --glare X            veiling-glare strength in [0,1] (default 0, off).
+                       It is a camera model, and with the night sky visible it
+                       greys the background rather than flattering it
+  --log-decades N      decades of radiance the curve spans (default 16)
   --out FILE           output file (.png, .ppm, or .apng for animation)
 
 ANIMATION
@@ -282,6 +334,130 @@ void place_sun(Options& o) {
     o.cfg.sun.centre[2] =  0.0;
 }
 
+// Solve the TOV equation for the requested star and configure the scene from
+// the result.  Nothing about the star's size is typed in: pick an equation of
+// state and a mass, and the radius is whatever hydrostatic equilibrium in
+// general relativity says it is.
+void setup_neutron_star(Options& o) {
+    const std::unique_ptr<ns::EOS> eos = make_eos(o.eos_name);
+
+    if (o.ns_curve) {
+        const bool wd = (o.eos_name == "electron-gas");
+        const ns::MassRadiusCurve curve =
+            wd ? ns::mass_radius_curve(*eos, 1e9, 1e15, 60)
+               : ns::mass_radius_curve(*eos, 1e17, 1e19, 60);
+        std::printf("\nMass-radius curve for %s\n", eos->name().c_str());
+        std::printf("  %14s %10s %10s %12s %8s\n",
+                    "rho_c [kg/m^3]", "M [Msun]", "R [km]", "compactness", "z");
+        for (const ns::Star& st : curve.stars)
+            std::printf("  %14.4e %10.4f %10.3f %12.4f %8.4f\n",
+                        st.rho_c, st.M_solar(), st.R_km(), st.compactness, st.redshift);
+        std::printf("\n  maximum mass %.4f Msun at R = %.3f km, rho_c = %.4e kg/m^3\n",
+                    curve.M_max_solar(), curve.max_mass.R_km(), curve.max_mass.rho_c);
+        std::printf("  stars past that turning point are unstable and collapse.\n\n");
+        std::exit(0);
+    }
+
+    const ns::Star st = ns::star_of_mass(*eos, o.ns_mass * phys::M_sun);
+    if (!st.ok) {
+        std::fprintf(stderr,
+            "error: %s cannot support a %.3f solar mass star.\n"
+            "       Try --mass-radius to see what it can do.\n",
+            eos->name().c_str(), o.ns_mass);
+        std::exit(1);
+    }
+
+    o.cfg.M_kg = st.M;
+    o.cfg.spin = 0.0;              // Birkhoff: the exterior is exactly Schwarzschild
+    o.cfg.disc_enabled = false;
+    o.cfg.star.enabled = true;
+    o.cfg.star.set_from(st);
+    o.cfg.star.T_eff = o.ns_temp;
+    o.cfg.star.set_spin(o.ns_spin);
+    o.cfg.star.caps = o.ns_caps;
+    o.cfg.star.cap_tilt = o.ns_cap_tilt * M_PI / 180.0;
+    o.cfg.star.cap_radius = o.ns_cap_radius * M_PI / 180.0;
+    o.cfg.star.cap_T = o.ns_cap_temp;
+
+    // Frame the star: put it at a comfortable distance and fit it in the shot.
+    // Because light bending magnifies the star, its apparent angular radius is
+    // set by the critical impact parameter b = R / sqrt(1 - r_s/R), not by R.
+    if (!o.user_set_distance) o.cfg.cam.r = 40.0 * o.cfg.star.R;
+    const double b_app = o.cfg.star.R / std::sqrt(1.0 - 2.0 / o.cfg.star.R);
+    if (!o.user_set_fov)
+        o.cfg.cam.fov = 5.0 * std::atan2(b_app, o.cfg.cam.r);
+
+    o.ns_star_solved = st;
+}
+
+void print_neutron_star_report(const Options& o) {
+    const ns::Star& st = o.ns_star_solved;
+    const bh::NeutronStar& S = o.cfg.star;
+    const double r_g = phys::r_g_metres(st.M);
+
+    std::printf("\n");
+    std::printf("================================================================\n");
+    std::printf("  Neutron star\n");
+    std::printf("================================================================\n");
+    std::printf("  equation of state    %s\n", o.eos_name.c_str());
+    std::printf("  central density      %.4e kg/m^3  =  %.2f x nuclear saturation\n",
+                st.rho_c, st.rho_c / phys::rho_nuclear);
+    std::printf("  central pressure     %.4e Pa\n", st.P_c);
+    std::printf("  gravitational mass   %.4f Msun  =  %.4e kg\n", st.M_solar(), st.M);
+    std::printf("  baryon mass          %.4f Msun\n", st.baryon_mass / phys::M_sun);
+    std::printf("  binding energy       %.4e J  =  %.4f Msun c^2  (released when it formed)\n",
+                st.binding_energy, st.binding_energy / (phys::M_sun * phys::c * phys::c));
+    std::printf("  radius               %.4f km   =  %.4f GM/c^2\n", st.R_km(), S.R);
+    std::printf("  mean density         %.4e kg/m^3\n",
+                st.M / ((4.0 / 3.0) * M_PI * st.R * st.R * st.R));
+    std::printf("  compactness r_s/R    %.4f     (Buchdahl's bound is %.4f)\n",
+                st.compactness, ns::kBuchdahlCompactness);
+    std::printf("  surface redshift z   %.4f\n", st.redshift);
+    std::printf("  surface gravity      %.4e m/s^2  =  %.3e g\n",
+                phys::G * st.M / (st.R * st.R * std::sqrt(1.0 - st.compactness)),
+                phys::G * st.M / (st.R * st.R * std::sqrt(1.0 - st.compactness)) / 9.81);
+    std::printf("  max sound speed      %.4f c   (causality needs < 1)\n", st.max_sound_speed);
+    std::printf("  photon sphere        %.3f GM/c^2 = %.3f km  (%s)\n",
+                3.0, 3.0 * r_g / 1000.0,
+                (S.R > 3.0) ? "inside the star: no photon ring, no shadow"
+                            : "outside the surface: this star has a photon ring");
+    std::printf("  visible surface      %.1f%% of the total area, from light bending alone\n",
+                100.0 * S.visible_fraction());
+
+    std::printf("\n  Surface\n");
+    std::printf("  temperature          %.4e K\n", S.T_eff);
+    const double lam = 2.897771955e-3 / std::max(S.T_eff, 1.0);
+    std::printf("  peak emission at     %.4g nm  (%s)\n", lam * 1e9,
+                lam < 1e-8 ? "X-ray" : lam < 4e-7 ? "ultraviolet"
+                : lam < 7e-7 ? "visible" : "infrared");
+    std::printf("  luminosity           %.4e W  =  %.4g L_sun  (as seen from infinity)\n",
+                S.luminosity_infinity(), S.luminosity_infinity() / phys::L_sun);
+    if (S.spin_hz > 0.0) {
+        std::printf("\n  Rotation\n");
+        std::printf("  spin                 %.4g Hz  =  %.4g ms period\n",
+                    S.spin_hz, 1000.0 / S.spin_hz);
+        std::printf("  equatorial speed     %.4f c\n", S.equatorial_speed());
+        std::printf("  Omega                %.6f c^3/GM\n", S.Omega);
+    }
+    if (S.caps) {
+        std::printf("\n  Magnetic polar caps\n");
+        std::printf("  obliquity            %.1f deg from the spin axis\n",
+                    S.cap_tilt * 180.0 / M_PI);
+        std::printf("  angular radius       %.1f deg\n", S.cap_radius * 180.0 / M_PI);
+        std::printf("  cap temperature      %.4e K\n", S.cap_T);
+    }
+
+    std::printf("\n  Camera\n");
+    std::printf("  distance             %.4g GM/c^2  =  %.4g km\n",
+                o.cfg.cam.r, o.cfg.cam.r * r_g / 1000.0);
+    std::printf("  inclination          %.2f deg from the spin axis\n", o.inclination_deg);
+    std::printf("  field of view        %.3f deg\n", o.cfg.cam.fov * 180.0 / M_PI);
+    const double b_app = S.R / std::sqrt(1.0 - 2.0 / S.R);
+    std::printf("  apparent radius      %.4f GM/c^2 (lensing magnifies %.3f to %.3f)\n",
+                b_app, S.R, b_app);
+    std::printf("\n");
+}
+
 void print_report(const Options& o) {
     const double M = o.cfg.M_kg;
     const double r_g = phys::r_g_metres(M);
@@ -429,6 +605,7 @@ int main(int argc, char** argv) {
             if (t == "aces") o.tonemap = img::ToneMap::ACES;
             else if (t == "reinhard") o.tonemap = img::ToneMap::Reinhard;
             else if (t == "log") o.tonemap = img::ToneMap::Log;
+            else if (t == "hdr") o.tonemap = img::ToneMap::HDR;
             else if (t == "linear") o.tonemap = img::ToneMap::Linear;
             else { std::fprintf(stderr, "error: unknown tonemap '%s'\n", t.c_str()); return 2; }
         }
@@ -443,6 +620,16 @@ int main(int argc, char** argv) {
         else if (s == "--hotspot") { o.cfg.hotspot.enabled = true; o.cfg.hotspot.r = need_num(argc, argv, i); }
         else if (s == "--hotspot-contrast") o.cfg.hotspot.contrast = need_num(argc, argv, i);
         else if (s == "--hotspot-size") o.cfg.hotspot.sigma = need_num(argc, argv, i);
+        else if (s == "--neutron-star") o.ns_mode = true;
+        else if (s == "--eos") { o.eos_name = need_str(argc, argv, i); o.ns_mode = true; }
+        else if (s == "--ns-mass") { o.ns_mass = need_num(argc, argv, i); o.ns_mode = true; }
+        else if (s == "--ns-temp") o.ns_temp = need_num(argc, argv, i);
+        else if (s == "--ns-spin") { o.ns_spin = need_num(argc, argv, i); o.ns_mode = true; }
+        else if (s == "--caps") { o.ns_caps = true; o.ns_mode = true; }
+        else if (s == "--cap-tilt") o.ns_cap_tilt = need_num(argc, argv, i);
+        else if (s == "--cap-radius") o.ns_cap_radius = need_num(argc, argv, i);
+        else if (s == "--cap-temp") o.ns_cap_temp = need_num(argc, argv, i);
+        else if (s == "--mass-radius") { o.ns_curve = true; o.ns_mode = true; }
         else if (s == "--threads") o.cfg.threads = static_cast<int>(need_num(argc, argv, i));
         else if (s == "--quiet") o.cfg.quiet = true;
         else { std::fprintf(stderr, "error: unknown option '%s'\n", s.c_str()); usage(2); }
@@ -451,6 +638,7 @@ int main(int argc, char** argv) {
     if (o.run_tests) return run_validation();
 
     o.cfg.cam.theta = std::clamp(o.inclination_deg, 0.5, 179.5) * M_PI / 180.0;
+    if (o.ns_mode) setup_neutron_star(o);
     o.ppm = o.out.size() > 4 && o.out.substr(o.out.size() - 4) == ".ppm";
 
     if (o.cfg.sun_enabled) place_sun(o);
@@ -529,7 +717,7 @@ int main(int argc, char** argv) {
     }
     o.cfg.r_escape = far;
 
-    if (!o.cfg.quiet) print_report(o);
+    if (!o.cfg.quiet) { if (o.ns_mode) print_neutron_star_report(o); else print_report(o); }
 
     if (!o.cfg.quiet) {
         std::fprintf(stderr, "Rendering %dx%d at %d spp on %d threads...\n",
