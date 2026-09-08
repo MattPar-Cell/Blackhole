@@ -674,6 +674,98 @@ void test_null_geodesics() {
     }
 }
 
+void test_extreme_rotation() {
+    section("5b. Maximally rotating holes");
+
+    char buf[260];
+
+    // The horizon is dragged round rigidly at Omega_H = a / (2 r_+).  That is
+    // not an independent definition: it is the limit of the zero-angular-
+    // momentum observer's angular velocity omega = 2 a r / A as r -> r_+.
+    // Checking the two agree exercises the metric right at the horizon.
+    {
+        double worst = 0.0;
+        for (double a : {0.3, 0.9, 0.998, 0.9999}) {
+            const double rp = bh::horizon_outer(a);
+            // Approach the horizon from outside.
+            const double r = rp * (1.0 + 1e-9);
+            const bh::Geom g = bh::geom_at(a, r, M_PI / 2);
+            const double omega = bh::zamo_omega(g);
+            const double OmH = bh::horizon_angular_velocity(a);
+            worst = std::max(worst, std::fabs(omega - OmH) / OmH);
+        }
+        std::snprintf(buf, sizeof buf,
+                      "max relative difference = %.2e; Omega_H(0.998) = %.6f c^3/GM",
+                      worst, bh::horizon_angular_velocity(0.998));
+        check("ZAMO angular velocity tends to Omega_H at the horizon", worst < 1e-7, buf);
+    }
+
+    // Inside the ergosphere g_tt changes sign, so no observer can stay at
+    // fixed phi: "standing still" would require moving faster than light.
+    // Everything in there is dragged forwards, whatever it does.
+    {
+        const double a = 0.998;
+        bool all_positive = true, outside_negative = true;
+        for (double th : {0.4, 1.0, M_PI / 2}) {
+            const double rE = bh::ergosphere_outer(a, th);
+            const double rp = bh::horizon_outer(a);
+            for (double f : {0.1, 0.5, 0.9}) {
+                const double r = rp + f * (rE - rp);
+                if (bh::metric_lower(a, r, th).tt <= 0.0) all_positive = false;
+            }
+            if (bh::metric_lower(a, rE * 1.05, th).tt >= 0.0) outside_negative = false;
+        }
+        std::snprintf(buf, sizeof buf,
+                      "g_tt > 0 throughout the ergosphere, < 0 outside it "
+                      "(equatorial static limit at r = %.3f M)",
+                      bh::ergosphere_outer(a, M_PI / 2));
+        check("no static observer can exist inside the ergosphere",
+              all_positive && outside_negative, buf);
+    }
+
+    // The extremal limits.  As a -> 1 the ISCO, the prograde photon orbit and
+    // the horizon all converge on r = M in these coordinates, and the binding
+    // energy at the ISCO tends to 1 - 1/sqrt(3): a maximally spinning hole can
+    // convert 42% of the rest mass of what it swallows into radiation.
+    {
+        const double eta_extremal = 1.0 - 1.0 / std::sqrt(3.0);
+        const double eta_998 = bh::disc_efficiency(0.998);
+        const double eta_9999 = bh::disc_efficiency(0.9999);
+        std::snprintf(buf, sizeof buf,
+                      "eta(0.998) = %.4f, eta(0.9999) = %.4f, extremal limit %.4f",
+                      eta_998, eta_9999, eta_extremal);
+        check("efficiency rises towards 1 - 1/sqrt(3) as a -> 1",
+              eta_998 > 0.31 && eta_998 < 0.33 && eta_9999 > eta_998 &&
+              eta_9999 < eta_extremal, buf);
+
+        std::snprintf(buf, sizeof buf,
+                      "a = 0.9999: ISCO %.4f M, photon orbit %.4f M, horizon %.4f M",
+                      bh::isco_radius(0.9999, +1), bh::photon_circular_orbit(0.9999, +1),
+                      bh::horizon_outer(0.9999));
+        check("ISCO, photon orbit and horizon converge as a -> 1",
+              bh::isco_radius(0.9999, +1) < 1.09 &&
+              bh::photon_circular_orbit(0.9999, +1) < 1.06, buf);
+    }
+
+    // The Thorne limit.  A hole fed by a radiating thin disc stops spinning up
+    // at a = 0.998, because photons emitted by the disc are preferentially
+    // captured when their angular momentum opposes the spin.  Check that the
+    // disc's inner edge is still comfortably outside the horizon there - the
+    // configuration has to be a real one.
+    {
+        const double a = 0.998;
+        const double isco = bh::isco_radius(a, +1);
+        const double rp = bh::horizon_outer(a);
+        const auto u = bh::keplerian_four_velocity(a, isco, +1);
+        const double Omega = u[3] / u[0];
+        std::snprintf(buf, sizeof buf,
+                      "ISCO %.4f M sits %.1f%% outside the horizon at %.4f M; Omega = %.4f",
+                      isco, 100.0 * (isco / rp - 1.0), rp, Omega);
+        check("at the Thorne limit the ISCO is still outside the horizon",
+              isco > rp * 1.10 && Omega > 0.0, buf);
+    }
+}
+
 void test_timelike_geodesics() {
     section("5. Timelike geodesics: perihelion precession");
 
@@ -1337,6 +1429,7 @@ int run_validation() {
     test_einstein_equations();
     test_orbits();
     test_null_geodesics();
+    test_extreme_rotation();
     test_timelike_geodesics();
     test_disc();
     test_radiometry();

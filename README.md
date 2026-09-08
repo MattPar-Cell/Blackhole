@@ -177,6 +177,103 @@ Sun, and the program says so rather than quietly cheating the scale.
 
 ---
 
+## A quasar at the spin limit
+
+"As fast as possible" has two different answers, and the gap between them is
+the interesting physics.
+
+The **mathematical** bound is $a = 1$. Past that the Kerr solution has no
+horizon at all — a naked singularity — and cosmic censorship says nature should
+not permit it.
+
+But a black hole *fed by a radiating thin disc* cannot even reach that. Photons
+emitted by the disc are preferentially swallowed when their angular momentum
+opposes the spin, and that back-reaction balances the spin-up from accreted
+matter at
+
+$$a = 0.998$$
+
+This is Thorne's limit (1974), and it means a maximally spinning astrophysical
+black hole is a specific, calculable object rather than an arbitrary number
+close to one.
+
+![Quasar at the Thorne limit](gallery/quasar.png)
+
+```bash
+./blackhole --preset quasar
+```
+
+A billion solar masses at $a = 0.998$, accreting at half the Eddington rate:
+
+```
+  outer horizon r+     1.0632 M
+  ISCO                 1.2370 M
+  radiative efficiency 0.3210  (32.10% of mc^2; fusion manages 0.7%)
+  luminosity           6.2855e+39 W  =  1.642e+13 L_sun  =  0.5 L_Edd
+
+  Rotation
+  horizon Omega_H      0.4693 c^3/GM   (a = 1 would give 0.5)
+  horizon turns once   every 18.3 hours
+  horizon circumference 9.865e+12 m  =  65.94 AU
+  inner disc orbits    every 20.41 hours, at 12.21 AU
+```
+
+That is what "insanely fast" amounts to when you put numbers on it. The horizon
+is **66 astronomical units around** — wider than Neptune's orbit — and it turns
+once every **18.3 hours**. The inner edge of the disc, twelve AU out, completes
+an orbit in under a day. Nothing about those figures is inserted; they follow
+from $a$, $M$ and the Kerr metric.
+
+The efficiency is the other consequence. At $a = 0.998$ the ISCO has come in to
+1.24 GM/c², so matter falling from rest at infinity radiates **32% of its rest
+mass** before it crosses the horizon. Hydrogen fusion manages 0.7%. Spun all the
+way to $a = 1$ the figure would be $1 - 1/\sqrt3 = 42\%$.
+
+### What the spin actually changes
+
+| | |
+|---|---|
+| ![a = 0.998](gallery/quasar.png) | ![a = 0](gallery/quasar-spin0.png) |
+| **a = 0.998.** The disc reaches in to 1.24 GM/c², and frame dragging flattens one side of the shadow into the characteristic D. | **a = 0, the same hole otherwise.** The ISCO retreats to 6 GM/c², so there is a large empty gap inside the disc, the shadow is circular, and the efficiency drops from 32% to 5.7%. |
+
+![Face on](gallery/quasar-face.png)
+
+*The same quasar at 30° from the spin axis — much closer to how a broad-line
+quasar is actually oriented, since we have to be looking inside the opening of
+the obscuring torus to see one at all. The frame above is more edge-on than
+that, chosen because it is the geometry where spin shows.*
+
+### The inner disc, in motion
+
+![ISCO hot spot](video/quasar-isco.apng)
+
+*Three orbits of a hot spot just outside the ISCO, over ten seconds. Each orbit
+is about a day of real time. The spot is dragged round with the hole, brightens
+sharply as it turns towards us, and its lensed second image runs round the far
+side out of phase — the light that took the long way round arrives later.*
+
+Five checks were added for this regime, all passing:
+
+```
+[PASS] ZAMO angular velocity tends to Omega_H at the horizon
+       max relative difference = 2.89e-09; Omega_H(0.998) = 0.469332 c^3/GM
+[PASS] no static observer can exist inside the ergosphere
+[PASS] efficiency rises towards 1 - 1/sqrt(3) as a -> 1
+       eta(0.998) = 0.3210, eta(0.9999) = 0.3820, extremal limit 0.4226
+[PASS] ISCO, photon orbit and horizon converge as a -> 1
+       a = 0.9999: ISCO 1.0785 M, photon orbit 1.0164 M, horizon 1.0141 M
+[PASS] at the Thorne limit the ISCO is still outside the horizon
+```
+
+The ergosphere check is worth naming. Inside it $g_{tt}$ changes sign, so
+"standing still" would require moving faster than light: *everything* in there
+is dragged forwards no matter what it does. The horizon's own angular velocity
+$\Omega_H = a/2r_+$ is not a separate definition either — it is the limit of the
+zero-angular-momentum observer's $\omega = 2ar/A$ as $r \to r_+$, and the two
+agree to 3 × 10⁻⁹.
+
+---
+
 ## Neutron stars
 
 A neutron star is a *body*, not a hole, and that changes the physics entirely.
@@ -570,7 +667,7 @@ sky directly behind the camera.*
 
 ```
 SCENE
-  --preset NAME        sgra | m87 | ton618 | stellar | gargantua | custom
+  --preset NAME        sgra | m87 | ton618 | quasar | stellar | gargantua | custom
   --mass MSUN          black hole mass in solar masses
   --spin A             dimensionless spin a/M in [-0.9999, 0.9999]
   --distance R         camera distance in gravitational radii GM/c^2

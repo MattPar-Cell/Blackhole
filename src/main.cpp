@@ -122,7 +122,7 @@ USAGE
   blackhole [options]
 
 SCENE
-  --preset NAME        sgra | m87 | ton618 | stellar | gargantua | custom
+  --preset NAME        sgra | m87 | ton618 | quasar | stellar | gargantua | custom
                        (default: sgra)
   --mass MSUN          black hole mass in solar masses
   --spin A             dimensionless spin a/M in [-0.9999, 0.9999]
@@ -269,6 +269,30 @@ void apply_preset(Options& o, const std::string& name) {
         // but that is not our actual view of this object.
         o.inclination_deg = 45.0;
         o.cfg.cam.fov = 0.55;
+    } else if (name == "quasar") {
+        // A luminous quasar spinning as fast as accretion can make it.
+        //
+        // "As fast as possible" has two different answers.  The mathematical
+        // bound is a = 1: past that a Kerr solution has no horizon at all, and
+        // cosmic censorship says nature should not allow it.  But a hole that
+        // is *fed* by a thin disc cannot even reach that.  Photons radiated by
+        // the disc are preferentially swallowed when they carry angular
+        // momentum opposed to the spin, and that back-reaction balances the
+        // spin-up from accreted material at a = 0.998 (Thorne 1974).  So this
+        // is a genuinely maximal astrophysical black hole, not an arbitrary
+        // number close to 1.
+        o.cfg.M_kg = 1.0e9 * phys::M_sun;
+        o.cfg.spin = 0.998;
+        o.cfg.cam.r = 80.0;
+        o.cfg.disc_r_out = 20.0;
+        o.cfg.eddington = 0.5;           // luminous quasars accrete near Eddington
+        // More edge-on than a type-1 quasar sightline really is: the broad
+        // lines that identify a quasar imply we are looking inside the torus
+        // opening.  This is the geometry in which spin shows itself, through
+        // the flattening of the shadow and the reach of the disc, so it is a
+        // visualisation choice rather than a claim about how quasars look.
+        o.inclination_deg = 84.0;
+        o.cfg.cam.fov = 0.58;
     } else if (name == "gargantua") {
         // A slowly spun-up supermassive hole with a bright, cool disc: the
         // configuration that makes the lensed disc most spectacular.
@@ -482,6 +506,32 @@ void print_report(const Options& o) {
     std::printf("  ISCO                 %.4f M   (%.4g km)\n",
                 bh::isco_radius(a, o.cfg.disc_sense),
                 bh::isco_radius(a, o.cfg.disc_sense) * r_g / 1000.0);
+
+    // How fast the hole itself turns.  The horizon is dragged round rigidly at
+    // Omega_H; nothing can hover without co-rotating with it.
+    const double t_g = r_g / phys::c;                 // GM/c^3, in seconds
+    const double OmH = bh::horizon_angular_velocity(a);
+    if (OmH > 0.0) {
+        const double P_H = 2.0 * M_PI / OmH * t_g;
+        const double circ = 2.0 * M_PI * bh::horizon_outer(a) * r_g;
+        char human[64];
+        if (P_H < 90.0)          std::snprintf(human, sizeof human, "%.3g seconds", P_H);
+        else if (P_H < 5400.0)   std::snprintf(human, sizeof human, "%.3g minutes", P_H / 60.0);
+        else if (P_H < 1.728e5)  std::snprintf(human, sizeof human, "%.3g hours", P_H / 3600.0);
+        else if (P_H < 3.156e7)  std::snprintf(human, sizeof human, "%.3g days", P_H / 86400.0);
+        else                     std::snprintf(human, sizeof human, "%.3g years", P_H / phys::year);
+        std::printf("\n  Rotation\n");
+        std::printf("  horizon Omega_H      %.4f c^3/GM   (a = 1 would give 0.5)\n", OmH);
+        std::printf("  horizon turns once   every %s\n", human);
+        std::printf("  horizon circumference %.4g m  =  %.4g AU\n", circ, circ / phys::AU);
+        const double r_isco = bh::isco_radius(a, o.cfg.disc_sense);
+        const double Om_isco = o.cfg.disc_sense /
+                               (std::pow(r_isco, 1.5) + o.cfg.disc_sense * a);
+        const double P_isco = 2.0 * M_PI / std::fabs(Om_isco) * t_g;
+        std::printf("  inner disc orbits    every %.4g s  =  %.4g hours, at %.4g AU\n",
+                    P_isco, P_isco / 3600.0, r_isco * r_g / phys::AU);
+        std::printf("  spin-up limit        a = 0.998 for a radiating thin disc (Thorne 1974)\n");
+    }
     const double R_shadow = 3.0 * std::sqrt(3.0);
     std::printf("  shadow diameter      %.4f M   =  %.4g km  =  %.4g R_sun\n",
                 2 * R_shadow, 2 * R_shadow * r_g / 1000.0,

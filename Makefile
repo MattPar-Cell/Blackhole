@@ -71,6 +71,11 @@ images: $(BIN)
 		--out gallery/sun-with-disc.png
 	./$(BIN) --preset stellar --sun --width 1600 --height 900 --spp 2 \
 		--out gallery/sun-vs-stellar.png
+	./$(BIN) --preset quasar --width 3840 --height 2160 --spp 2 --out gallery/quasar.png
+	./$(BIN) --preset quasar --spin 0.0 --width 1920 --height 1080 --spp 2 \
+		--out gallery/quasar-spin0.png
+	./$(BIN) --preset quasar --inclination 30 --fov 40 \
+		--width 1920 --height 1080 --spp 2 --out gallery/quasar-face.png
 
 # Neutron stars.  Mass and radius come from a TOV solve of the chosen equation
 # of state, so the only inputs are the physics.
@@ -105,6 +110,9 @@ videos: $(BIN)
 	./$(BIN) --preset sgra --inclination 4 --inclination-to 89 --fov 34 \
 		--duration 10 --fps 15 --width 400 --height 250 --spp 1 --no-stars \
 		--out video/inclination-sweep.apng
+	./$(BIN) --preset quasar --hotspot 1.6 --hotspot-size 0.4 --hotspot-contrast 250 \
+		--orbits 3 --duration 10 --fps 24 --width 420 --height 300 --spp 1 \
+		--out video/quasar-isco.apng
 
 clean:
 	rm -f $(OBJ) $(BIN)

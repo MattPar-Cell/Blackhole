@@ -193,6 +193,19 @@ inline double horizon_inner(double a) {
     return 1.0 - std::sqrt(std::max(0.0, d));
 }
 
+// Angular velocity of the horizon itself, Omega_H = a c^3 / (2 G M r_+).
+//
+// A Kerr horizon is not a surface that can be "at rest": it drags spacetime
+// round with it rigidly, at this rate.  Every zero-angular-momentum observer
+// approaches Omega_H as they approach the horizon, which is checked in
+// validate.cpp.  For a hole at the Thorne limit it is 0.469 c^3/GM - so a
+// billion-solar-mass horizon, sixty-six astronomical units around, turns once
+// in eighteen hours.
+inline double horizon_angular_velocity(double a) {
+    const double rp = horizon_outer(a);
+    return (rp > 0.0) ? a / (2.0 * rp) : 0.0;
+}
+
 // Static limit (outer boundary of the ergosphere): r_E = M + sqrt(M^2-a^2cos^2).
 inline double ergosphere_outer(double a, double th) {
     const double c = std::cos(th);
