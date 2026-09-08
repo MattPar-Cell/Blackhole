@@ -551,6 +551,19 @@ directions:
 
 ![Inclination sweep](video/inclination-sweep.apng)
 
+With jets in the frame, the same camera move shows something else. The jets are
+*identical* in their own rest frame at every instant of this film — nothing
+about the source changes. What changes is the angle between the flow and the
+line of sight, and with it the Doppler factor
+$\delta = 1/\Gamma(1-\beta\cos\theta)$ raised to the power $2+\alpha$:
+
+![Jet beaming sweep](video/quasar-jet-sweep.apng)
+
+*From 8° to 90°. Near the axis the approaching jet is beamed hard towards us
+and the receding one has all but vanished; by edge-on the two are equal again
+and both are dimmer than the approaching jet ever was. That asymmetry is the
+standard way jet speeds are measured in real sources.*
+
 ```bash
 # 10 seconds, 24 fps, two orbits of a hot spot — self-contained animated PNG
 ./blackhole --preset sgra --inclination 60 --fov 34 \
@@ -563,6 +576,11 @@ directions:
 ./blackhole --preset sgra --inclination 4 --inclination-to 89 --fov 34 \
     --duration 10 --fps 24 --width 480 --height 300 --spp 1 --no-stars \
     --out video/inclination-sweep.apng
+
+# Doppler beaming switching off, as the jets swing side-on
+./blackhole --preset quasar --inclination 8 --inclination-to 90 --fov 62 \
+    --duration 10 --fps 15 --width 420 --height 315 --spp 1 \
+    --out video/quasar-jet-sweep.apng
 ```
 
 `.apng` writes a self-contained animated PNG that plays in any browser, using
@@ -689,7 +707,7 @@ checked against Einstein's $4GM/c^2b$:
 | Doppler factor → $1/\gamma(1\mp v)$ far out | 3.2e-05 |
 | jet plasma four-velocity normalised, inside the ergosphere | 2.8e-13 |
 | jet redshift factor → $1/\Gamma(1-\beta\cos\theta)$ far out | 7.2e-16 |
-| Blandford–Znajek power $\propto \Omega_H^2$ at small spin | 7.0e-04 |
+| Blandford–Znajek power $\propto \Omega_H^2$ at small spin | 1.8e-04 |
 | jet emitted power vs the Blandford–Znajek budget | exact to 6 figures |
 | Sgr A* shadow vs EHT (51.8 ± 2.3 µas) | predicts 53.3 µas |
 | M87* shadow vs EHT (42 ± 3 µas) | predicts 39.7 µas |

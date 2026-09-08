@@ -803,6 +803,10 @@ int main(int argc, char** argv) {
 
     if (o.run_tests) return run_validation();
 
+    // --no-jets wins wherever it appears on the command line, including before
+    // a --jet-* flag that would otherwise switch them on.
+    if (o.jets_forced_off) o.cfg.jet.enabled = false;
+
     o.cfg.cam.theta = std::clamp(o.inclination_deg, 0.5, 179.5) * M_PI / 180.0;
     if (o.ns_mode) setup_neutron_star(o);
     o.ppm = o.out.size() > 4 && o.out.substr(o.out.size() - 4) == ".ppm";

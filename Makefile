@@ -123,6 +123,12 @@ videos: $(BIN)
 	./$(BIN) --preset quasar --hotspot 1.6 --hotspot-size 0.4 --hotspot-contrast 250 \
 		--orbits 3 --duration 10 --fps 24 --width 420 --height 300 --spp 1 \
 		--out video/quasar-isco.apng
+# Swinging the camera from nearly down the jet round to edge-on.  Nothing in
+# the scene changes: the jets are identical in their own rest frame throughout.
+# Everything you see happen is Doppler beaming turning off.
+	./$(BIN) --preset quasar --inclination 8 --inclination-to 90 --fov 62 \
+		--duration 10 --fps 15 --width 420 --height 315 --spp 1 \
+		--out video/quasar-jet-sweep.apng
 
 clean:
 	rm -f $(OBJ) $(BIN)
