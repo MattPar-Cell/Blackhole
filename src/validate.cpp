@@ -14,6 +14,7 @@
 #include "disc.h"
 #include "tov.h"
 #include "neutronstar.h"
+#include "jet.h"
 #include "spectrum.h"
 #include "constants.h"
 
@@ -1417,6 +1418,281 @@ void test_neutron_star_optics() {
     }
 }
 
+// ===========================================================================
+// 13. Relativistic jets
+// ===========================================================================
+void test_jets() {
+    section("13. Blandford-Znajek jets");
+    char buf[512];
+
+    // --- the power itself ---------------------------------------------------
+
+    // A hole with no spin has no rotational energy to give up.  This is the
+    // whole point: the jet is not powered by the accretion flow.
+    {
+        const double P0 = bh::blandford_znajek_power(0.0, 1.0);
+        std::snprintf(buf, sizeof buf, "P(a=0) = %.3e Mdot c^2", P0);
+        check("a non-rotating hole drives no jet", P0 == 0.0, buf);
+    }
+
+    // At small spin Omega_H -> a/4 and the power is quadratic in it.  Doubling
+    // the spin must quadruple the power.
+    {
+        const double P1 = bh::blandford_znajek_power(0.01, 1.0);
+        const double P2 = bh::blandford_znajek_power(0.02, 1.0);
+        std::snprintf(buf, sizeof buf, "P(2a)/P(a) = %.6f, expected 4", P2 / P1);
+        check("jet power scales as Omega_H^2 at small spin",
+              close(P2 / P1, 4.0, 2e-3), buf);
+    }
+
+    // The headline number, and the reason a maximally spinning hole is
+    // interesting: the jet takes out more than the accretion brings in.
+    {
+        const double P = bh::blandford_znajek_power(0.998, 1.0);   // per Mdot c^2
+        const double OmH = bh::horizon_angular_velocity(0.998);
+        std::snprintf(buf, sizeof buf,
+                      "Omega_H = %.4f, P = %.4f Mdot c^2 (phi = 50, MAD)", OmH, P);
+        check("at the Thorne limit the jet outpowers the accretion flow",
+              P > 1.5 && P < 2.5, buf);
+    }
+
+    // Monotone in spin over the whole physical range.
+    {
+        bool mono = true;
+        double prev = -1.0;
+        for (int i = 0; i <= 100; ++i) {
+            const double P = bh::blandford_znajek_power(0.998 * i / 100.0, 1.0);
+            if (P < prev) mono = false;
+            prev = P;
+        }
+        std::snprintf(buf, sizeof buf, "P(0.998)/P(0.5) = %.3f",
+                      bh::blandford_znajek_power(0.998, 1.0) /
+                      bh::blandford_znajek_power(0.5, 1.0));
+        check("jet power increases monotonically with spin", mono, buf);
+    }
+
+    // --- the flow ------------------------------------------------------------
+
+    // The plasma four-velocity has to be a unit timelike vector everywhere,
+    // including inside the ergosphere where no static observer exists at all.
+    {
+        bh::Jet j;
+        j.enabled = true;
+        j.configure(0.998, 1.0, 1.0);
+        double worst = 0.0, worst_r = 0.0;
+        for (double r : {1.1, 1.5, 3.0, 8.0, 30.0, 120.0}) {
+            for (double th : {0.02, 0.3, 0.9, M_PI / 2, 2.2, 3.1}) {
+                const bh::Geom g = bh::geom_at(0.998, r, th);
+                const auto u = j.four_velocity(g);
+                const bh::MetricLower m = bh::metric_lower(g);
+                const double n = m.tt * u[0] * u[0] + 2.0 * m.tp * u[0] * u[3] +
+                                 m.rr * u[1] * u[1] + m.thth * u[2] * u[2] +
+                                 m.pp * u[3] * u[3];
+                if (std::fabs(n + 1.0) > worst) { worst = std::fabs(n + 1.0); worst_r = r; }
+            }
+        }
+        std::snprintf(buf, sizeof buf,
+                      "max |u.u + 1| = %.2e (worst at r = %.1f, a = 0.998)", worst, worst_r);
+        check("jet plasma four-velocity is normalised", worst < 1e-12, buf);
+    }
+
+    // The Lorentz factor a local non-rotating observer measures must be the one
+    // the velocity profile asked for.
+    {
+        bh::Jet j;
+        j.enabled = true;
+        j.configure(0.9, 1.0, 1.0);
+        double worst = 0.0;
+        for (double z : {5.0, 15.0, 40.0, 100.0}) {
+            const double r = z / std::cos(0.25), th = 0.25;
+            const bh::Geom g = bh::geom_at(0.9, r, th);
+            const auto u = j.four_velocity(g);
+            const bh::Tetrad T = bh::zamo_tetrad(g);
+            const bh::MetricLower m = bh::metric_lower(g);
+            // W = -u . n, with n the ZAMO four-velocity e_(0).
+            const double W = -(m.tt * u[0] * T.e[0][0] +
+                               m.tp * (u[0] * T.e[0][3] + u[3] * T.e[0][0]) +
+                               m.pp * u[3] * T.e[0][3]);
+            worst = std::max(worst, std::fabs(W - j.gamma_at(r * std::cos(th))) /
+                                    j.gamma_at(r * std::cos(th)));
+        }
+        std::snprintf(buf, sizeof buf,
+                      "max relative error %.2e against the prescribed Gamma(z)", worst);
+        check("locally measured Lorentz factor matches the profile", worst < 1e-12, buf);
+    }
+
+    // --- beaming -------------------------------------------------------------
+
+    // Far from the hole spacetime is flat, so the redshift factor the renderer
+    // computes has to reduce to the special-relativistic Doppler factor
+    // delta = 1 / (Gamma (1 - beta cos(theta))) for the photon's own direction
+    // of travel.  This is the single quantity that decides how one-sided a jet
+    // looks, so it is worth checking against the textbook formula and not just
+    // against itself.
+    {
+        bh::Jet j;
+        j.enabled = true;
+        j.configure(0.9, 1.0, 1.0);
+        const double r = 1.0e6, th = 1.0e-3;   // on the axis, effectively flat
+        const bh::Geom g = bh::geom_at(0.9, r, th);
+        const bh::Tetrad T = bh::zamo_tetrad(g);
+        const bh::MetricLower m = bh::metric_lower(g);
+        const auto u = j.four_velocity(g);
+
+        // Extract the plasma's ordinary velocity in the local orthonormal frame.
+        auto dotT = [&](int leg) {
+            return m.tt * u[0] * T.e[leg][0] +
+                   m.tp * (u[0] * T.e[leg][3] + u[3] * T.e[leg][0]) +
+                   m.rr * u[1] * T.e[leg][1] + m.thth * u[2] * T.e[leg][2] +
+                   m.pp * u[3] * T.e[leg][3];
+        };
+        const double W = -dotT(0);
+        const double v[3] = {dotT(1) / W, dotT(2) / W, dotT(3) / W};
+        const double beta = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+
+        double worst = 0.0;
+        for (double ang = 0.1; ang < 3.1; ang += 0.2) {
+            // Ray direction away from the camera; the photon travels the other
+            // way, so cos(theta) picks up the minus sign.
+            const double dir[3] = {std::cos(ang), std::sin(ang), 0.0};
+            const bh::State y = bh::make_photon(0.9, r, th, 0.0, T, dir, true);
+            const double ku = y[bh::Y_PT] * u[0] + y[bh::Y_PR] * u[1] +
+                              y[bh::Y_PTH] * u[2] + y[bh::Y_PPH] * u[3];
+            const double gfac = 1.0 / ku;
+            const double cosang = -(dir[0] * v[0] + dir[1] * v[1] + dir[2] * v[2]) / beta;
+            const double delta = 1.0 / (W * (1.0 - beta * cosang));
+            worst = std::max(worst, std::fabs(gfac - delta) / delta);
+        }
+        std::snprintf(buf, sizeof buf,
+                      "Gamma = %.3f, beta = %.5f: max relative error %.2e", W, beta, worst);
+        check("redshift factor reduces to the Doppler formula in flat space",
+              worst < 1e-6, buf);
+    }
+
+    // The observable consequence: a jet pointed near the line of sight is
+    // enormously brighter than its receding twin, and the same jet viewed from
+    // the side is not.  Nothing in the code puts this in by hand.
+    {
+        bh::Jet j;
+        const double G = 10.0;
+        const double beta = std::sqrt(1.0 - 1.0 / (G * G));
+        auto ratio = [&](double incl_deg) {
+            const double c = std::cos(incl_deg * M_PI / 180.0);
+            const double d_app = 1.0 / (G * (1.0 - beta * c));
+            const double d_rec = 1.0 / (G * (1.0 + beta * c));
+            return std::pow(d_app / d_rec, 2.0 + j.alpha);
+        };
+        const double r20 = ratio(20.0), r84 = ratio(84.0);
+        std::snprintf(buf, sizeof buf,
+                      "Gamma = 10: %.3e at 20 deg, %.2f at 84 deg", r20, r84);
+        check("beaming makes a jet one-sided only at small inclination",
+              r20 > 1e3 && r84 > 1.0 && r84 < 3.0, buf);
+    }
+
+    // --- energy bookkeeping --------------------------------------------------
+
+    // configure() normalises the emissivity by doing the transverse integral
+    // analytically and the longitudinal one on a grid.  Check the result the
+    // hard way, with a brute-force two-dimensional quadrature of the emissivity
+    // that the renderer itself samples.
+    {
+        bh::Jet j;
+        j.enabled = true;
+        const double r_g = phys::r_g_metres(1.0e9 * phys::M_sun);
+        const double mdot_c2 = 2.0e40;
+        j.configure(0.998, mdot_c2, r_g);
+
+        // j_bol = (j_nu0 / r_g) * nu_0^alpha * Integral_{nu_lo}^{nu_hi} nu^-alpha dnu
+        const double band = (std::pow(bh::Jet::nu_hi, 1.0 - j.alpha) -
+                             std::pow(bh::Jet::nu_lo, 1.0 - j.alpha)) / (1.0 - j.alpha);
+        const double A = j.j_nu0 / r_g * std::pow(bh::Jet::nu_0, j.alpha) * band;
+
+        double V = 0.0;
+        constexpr int NZ = 1200, NR = 400;
+        const double dz = (j.z_top - j.z_base) / NZ;
+        for (int i = 0; i < NZ; ++i) {
+            const double z = j.z_base + (i + 0.5) * dz;
+            const double rmax = 2.0 * j.radius(z);
+            const double dr = rmax / NR;
+            for (int k = 0; k < NR; ++k) {
+                const double rho = (k + 0.5) * dr;
+                V += j.shape(z, rho) * 2.0 * M_PI * rho * dr * dz;
+            }
+        }
+        V *= 2.0;                                    // both jets
+        const double L = 4.0 * M_PI * A * V * r_g * r_g * r_g;
+        std::snprintf(buf, sizeof buf,
+                      "recovered %.4e W against %.4e W requested (%.3f%% off)",
+                      L, j.L_rad, 100.0 * std::fabs(L / j.L_rad - 1.0));
+        check("emitted power matches the Blandford-Znajek budget",
+              close(L, j.L_rad, 2e-3), buf);
+    }
+
+    // The prescribed collimation really is the measured parabola, and the flow
+    // stays subluminal everywhere.
+    {
+        bh::Jet j;
+        j.enabled = true;
+        j.configure(0.998, 1.0, 1.0);
+        const double slope = std::log(j.radius(100.0) / j.radius(10.0)) / std::log(10.0);
+        bool sub = true;
+        for (double z = j.z_base; z <= j.z_top; z += 0.5)
+            if (!(j.speed_at(z) < 1.0) || !(j.gamma_at(z) <= j.gamma_max + 1e-12)) sub = false;
+        std::snprintf(buf, sizeof buf,
+                      "d log R / d log z = %.4f (Asada & Nakamura measure 0.58)", slope);
+        check("jet boundary follows the measured parabola",
+              close(slope, j.k, 1e-12) && sub, buf);
+    }
+
+    // --- colour --------------------------------------------------------------
+
+    // powerlaw_xyz integrates in wavelength; redo it in frequency, which is a
+    // different substitution with a different Jacobian, and require the same
+    // answer.
+    {
+        const double alpha = 0.7;
+        const spec::XYZ a1 = spec::powerlaw_xyz(alpha);
+        // I_nu = (nu/nu_0)^-alpha, integrated against the CMFs in frequency.
+        spec::XYZ a2{};
+        {
+            constexpr double lam_lo = 360e-9, lam_hi = 830e-9;
+            const double nu_lo = phys::c / lam_hi, nu_hi = phys::c / lam_lo;
+            constexpr int N = 200000;
+            const double dnu = (nu_hi - nu_lo) / N;
+            for (int i = 0; i < N; ++i) {
+                const double nu = nu_lo + (i + 0.5) * dnu;
+                const double nm = phys::c / nu * 1e9;
+                const double w = std::pow(nu / (phys::c / 550e-9), -alpha) * dnu;
+                const spec::XYZ cmf = spec::cie_cmf(nm);
+                a2.x += w * cmf.x;
+                a2.y += w * cmf.y;
+                a2.z += w * cmf.z;
+            }
+        }
+        std::snprintf(buf, sizeof buf,
+                      "Y: %.6e (wavelength) vs %.6e (frequency), %.3f%% apart",
+                      a1.y, a2.y, 100.0 * std::fabs(a1.y / a2.y - 1.0));
+        check("synchrotron colour is integration-variable independent",
+              close(a1.y, a2.y, 3e-3) && close(a1.x, a2.x, 3e-3) &&
+              close(a1.z, a2.z, 3e-3), buf);
+    }
+
+    // A rising-to-the-blue power law must actually come out blue: bluer than
+    // the Sun, and bluer still for a flatter spectrum.
+    {
+        const spec::RGB jet = spec::gamut_clamp(
+            spec::xyz_to_linear_srgb(spec::powerlaw_xyz(0.7)));
+        const spec::RGB sun = spec::blackbody_rgb(phys::T_sun);
+        const spec::RGB flat = spec::gamut_clamp(
+            spec::xyz_to_linear_srgb(spec::powerlaw_xyz(0.0)));
+        const double bj = jet.b / jet.r, bs = sun.b / sun.r, bf = flat.b / flat.r;
+        std::snprintf(buf, sizeof buf,
+                      "blue/red: alpha=0.7 %.3f, alpha=0 %.3f, the Sun %.3f", bj, bf, bs);
+        // I_lambda ~ lambda^(alpha-2), so a *flatter* spectrum is the bluer one.
+        check("optically thin synchrotron renders blue", bj > bs && bf > bj, buf);
+    }
+}
+
 } // namespace
 
 int run_validation() {
@@ -1438,6 +1714,7 @@ int run_validation() {
     test_degenerate_matter();
     test_tov();
     test_neutron_star_optics();
+    test_jets();
 
     std::printf("\n================================================================\n");
     std::printf("  %d passed, %d failed\n", g_pass, g_fail);

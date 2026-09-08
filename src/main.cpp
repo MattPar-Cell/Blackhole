@@ -58,6 +58,9 @@ struct Options {
     bool   ns_curve = false;        // print the mass-radius curve and exit
     ns::Star ns_star_solved;        // result of the TOV solve
 
+    // Jets
+    bool jets_forced_off = false;
+
     double sun_distance = 0.0;      // 0 = auto placement
     double inclination_deg = 85.0;
     std::string preset = "sgra";
@@ -87,6 +90,7 @@ void accumulate(bh::RenderStats& a, const bh::RenderStats& b) {
     a.disc_hits += b.disc_hits; a.sun_hits += b.sun_hits;
     a.escaped += b.escaped; a.exhausted += b.exhausted;
     a.star_hits += b.star_hits; a.total_flux += b.total_flux;
+    a.jet_rays += b.jet_rays;
     a.seconds += b.seconds;
     a.max_norm_error = std::max(a.max_norm_error, b.max_norm_error);
     a.max_carter_drift = std::max(a.max_carter_drift, b.max_carter_drift);
@@ -105,6 +109,8 @@ void print_stats(const Options& o, const bh::RenderStats& stats, double exposure
     }
     if (o.cfg.sun_enabled)
         std::printf("  hit the Sun           %5.1f%%\n", 100.0 * stats.sun_hits / std::max(1LL, stats.rays));
+    if (o.cfg.jet.enabled)
+        std::printf("  passed through a jet  %5.1f%%\n", 100.0 * stats.jet_rays / std::max(1LL, stats.rays));
     std::printf("  escaped to the sky    %5.1f%%\n", 100.0 * stats.escaped / std::max(1LL, stats.rays));
     if (stats.exhausted)
         std::printf("  step limit reached    %5.1f%%\n", 100.0 * stats.exhausted / std::max(1LL, stats.rays));
@@ -135,6 +141,20 @@ DISC
   --disc-outer R       outer radius in gravitational radii
   --eddington F        accretion rate as a fraction of the Eddington rate
   --retrograde         disc counter-rotates with respect to the hole
+
+JETS
+  --jets               add Blandford-Znajek plasma jets along the spin axis.
+                       Their power is computed from the spin and the accretion
+                       rate, not typed in; at a = 0.998 it exceeds Mdot c^2,
+                       because the energy is coming out of the hole's rotation.
+                       On by default for --preset quasar and --preset m87
+  --no-jets            switch them off
+  --jet-length Z       how far the jets are drawn, in GM/c^2 (default 130)
+  --jet-gamma G        terminal bulk Lorentz factor (default 10)
+  --jet-alpha A        synchrotron spectral index, S_nu ~ nu^-A (default 0.7)
+  --jet-efficiency F   fraction of the jet power that is radiated (default 0.02)
+  --jet-flux PHI       dimensionless magnetic flux on the horizon; 50 is the
+                       saturated, magnetically arrested value (default 50)
 
 THE SUN
   --sun                add the Sun to the frame, at the same distance as the
@@ -236,7 +256,15 @@ void apply_preset(Options& o, const std::string& name) {
         o.cfg.disc_r_out = 30.0;
         o.cfg.eddington = 1e-5;
         o.inclination_deg = 17.0;        // M87's jet points nearly at us
-        o.cfg.cam.fov = 0.6;
+        o.cfg.cam.fov = 0.78;
+        // M87 is the archetype: the first jet ever discovered (Curtis 1918) and
+        // the one whose parabolic collimation the jet model here is taken from.
+        // At 17 degrees the approaching side is strongly beamed and the
+        // receding side is not, so the renderer produces the one-sided jet that
+        // is actually observed - without being told to.
+        o.cfg.jet.enabled = true;
+        o.cfg.jet.z_top = 130.0;
+        o.cfg.jet.gamma_max = 8.0;
     } else if (name == "stellar") {
         // A typical X-ray binary: a 10 solar-mass hole accreting from a
         // companion star.
@@ -292,7 +320,13 @@ void apply_preset(Options& o, const std::string& name) {
         // the flattening of the shadow and the reach of the disc, so it is a
         // visualisation choice rather than a claim about how quasars look.
         o.inclination_deg = 84.0;
-        o.cfg.cam.fov = 0.58;
+        o.cfg.cam.fov = 0.90;            // wide enough to show the jets leaving
+        // A hole spinning this fast, fed by a magnetically arrested disc, drives
+        // a Blandford-Znajek jet from its poles that carries away more power
+        // than the accretion flow delivers.  See jet.h.
+        o.cfg.jet.enabled = true;
+        o.cfg.jet.z_top = 130.0;
+        o.cfg.jet.gamma_max = 10.0;
     } else if (name == "gargantua") {
         // A slowly spun-up supermassive hole with a bright, cool disc: the
         // configuration that makes the lensed disc most spectacular.
@@ -356,6 +390,79 @@ void place_sun(Options& o) {
     o.cfg.sun.centre[0] = -sp * sep;
     o.cfg.sun.centre[1] =  cp * sep;
     o.cfg.sun.centre[2] =  0.0;
+}
+
+// Fix the jets' power and emissivity from the spin and the accretion rate.
+// Nothing about how bright the jet is gets typed in: the Blandford-Znajek
+// formula turns (a, Mdot) into a power, a fixed radiative fraction of that is
+// spread over the prescribed jet volume, and the ray tracer does the rest.
+void setup_jet(Options& o) {
+    bh::Jet& j = o.cfg.jet;
+    if (!j.enabled) return;
+    if (o.ns_mode) {                       // no horizon, no Blandford-Znajek
+        j.enabled = false;
+        return;
+    }
+    if (!o.cfg.disc_enabled) {
+        std::fprintf(stderr,
+            "note: --no-disc leaves no accretion flow to thread the horizon with\n"
+            "      magnetic flux, so the jets are switched off too.\n");
+        j.enabled = false;
+        return;
+    }
+    const bh::NovikovThorneDisc d(o.cfg.M_kg, o.cfg.spin, o.cfg.disc_r_out,
+                                  o.cfg.eddington, o.cfg.disc_sense);
+    j.z_sat = std::min(j.z_sat, 0.7 * j.z_top);
+    j.configure(o.cfg.spin, d.mdot_si() * phys::c * phys::c, phys::r_g_metres(o.cfg.M_kg));
+    if (!(j.P_jet > 0.0)) {
+        std::fprintf(stderr,
+            "note: a black hole with a = %.3f has no rotational energy to tap, so the\n"
+            "      Blandford-Znajek power is zero and there is no jet.\n", o.cfg.spin);
+        j.enabled = false;
+    }
+}
+
+void print_jet_report(const Options& o) {
+    const bh::Jet& j = o.cfg.jet;
+    if (!j.enabled) return;
+    const bh::NovikovThorneDisc d(o.cfg.M_kg, o.cfg.spin, o.cfg.disc_r_out,
+                                  o.cfg.eddington, o.cfg.disc_sense);
+    const double mdot_c2 = d.mdot_si() * phys::c * phys::c;
+    const double r_g = phys::r_g_metres(o.cfg.M_kg);
+
+    std::printf("\n  Jets (Blandford-Znajek)\n");
+    std::printf("  horizon flux phi     %.4g   (50 = magnetically arrested)\n", j.phi_flux);
+    std::printf("  jet power            %.4e W  =  %.4g L_sun\n",
+                j.P_jet, j.P_jet / phys::L_sun);
+    std::printf("  as a fraction of     Mdot c^2  x %.4f", j.P_jet / mdot_c2);
+    if (j.P_jet > mdot_c2)
+        std::printf("   <- more than the accreted matter\n"
+                    "                       brings in.  The surplus is the hole's own\n"
+                    "                       rotational energy, so this jet spins it down\n");
+    else
+        std::printf("\n");
+    std::printf("  disc luminosity      %.4e W   (jet / disc = %.3g)\n",
+                d.luminosity(), j.P_jet / d.luminosity());
+    std::printf("  radiated fraction    %.3g  ->  %.4e W of synchrotron light\n",
+                j.eps_rad, j.L_rad);
+    std::printf("  spectral index       %.2f   (I_lambda ~ lambda^%.2f: this jet is blue)\n",
+                j.alpha, j.alpha - 2.0);
+    std::printf("  drawn from           %.1f to %.1f GM/c^2  =  %.3g to %.3g light days\n",
+                j.z_base, j.z_top,
+                j.z_base * r_g / phys::c / 86400.0, j.z_top * r_g / phys::c / 86400.0);
+    std::printf("  width               R = %.2f (z/%.1f)^%.2f  (parabolic, as measured\n",
+                j.R_base, j.z_base, j.k);
+    std::printf("                       for M87 by Asada & Nakamura 2012)\n");
+    std::printf("  bulk Lorentz factor  %.2f at the base -> %.2f asymptotically\n",
+                j.gamma_at(j.z_base), j.gamma_max);
+    std::printf("  terminal speed       %.6f c\n", j.speed_at(j.z_top));
+    std::printf("  field-line rotation  Omega_F = %.4f c^3/GM  = Omega_H / 2\n", j.Omega_F);
+    if (j.Omega_F > 0.0) {
+        const double R_lc = 1.0 / j.Omega_F;
+        std::printf("  light cylinder       %.2f GM/c^2  (beyond it the plasma can no longer\n",
+                    R_lc);
+        std::printf("                       keep up with the field lines)\n");
+    }
 }
 
 // Solve the TOV equation for the requested star and configure the scene from
@@ -556,6 +663,8 @@ void print_report(const Options& o) {
                     : lam < 7e-7 ? "visible" : "infrared");
     }
 
+    print_jet_report(o);
+
     std::printf("\n  Camera\n");
     std::printf("  distance             %.4g M  =  %.4e m  =  %.4g AU\n",
                 o.cfg.cam.r, o.cfg.cam.r * r_g, o.cfg.cam.r * r_g / phys::AU);
@@ -639,6 +748,13 @@ int main(int argc, char** argv) {
         else if (s == "--disc-outer") o.cfg.disc_r_out = need_num(argc, argv, i);
         else if (s == "--eddington") o.cfg.eddington = need_num(argc, argv, i);
         else if (s == "--retrograde") o.cfg.disc_sense = -1;
+        else if (s == "--jets") o.cfg.jet.enabled = true;
+        else if (s == "--no-jets") { o.cfg.jet.enabled = false; o.jets_forced_off = true; }
+        else if (s == "--jet-length") { o.cfg.jet.z_top = need_num(argc, argv, i); o.cfg.jet.enabled = !o.jets_forced_off; }
+        else if (s == "--jet-gamma") o.cfg.jet.gamma_max = std::max(1.0, need_num(argc, argv, i));
+        else if (s == "--jet-alpha") o.cfg.jet.alpha = need_num(argc, argv, i);
+        else if (s == "--jet-efficiency") o.cfg.jet.eps_rad = need_num(argc, argv, i);
+        else if (s == "--jet-flux") o.cfg.jet.phi_flux = need_num(argc, argv, i);
         else if (s == "--sun") o.cfg.sun_enabled = true;
         else if (s == "--sun-distance") { o.cfg.sun_enabled = true; o.sun_distance = need_num(argc, argv, i); }
         else if (s == "--no-stars") o.cfg.stars_enabled = false;
@@ -691,6 +807,7 @@ int main(int argc, char** argv) {
     if (o.ns_mode) setup_neutron_star(o);
     o.ppm = o.out.size() > 4 && o.out.substr(o.out.size() - 4) == ".ppm";
 
+    setup_jet(o);
     if (o.cfg.sun_enabled) place_sun(o);
 
     // ---- animation setup ------------------------------------------------
@@ -765,6 +882,7 @@ int main(int argc, char** argv) {
                                      o.cfg.sun.centre[2] * o.cfg.sun.centre[2]);
         far = std::max(far, (sep + o.cfg.sun.radius) * 3.0);
     }
+    if (o.cfg.jet.enabled) far = std::max(far, o.cfg.jet.r_bound * 1.5);
     o.cfg.r_escape = far;
 
     if (!o.cfg.quiet) { if (o.ns_mode) print_neutron_star_report(o); else print_report(o); }

@@ -36,7 +36,30 @@ double redshift_factor(const State& y, const std::array<double, 4>& u) {
 struct Hit {
     enum class What { Horizon, Disc, Sun, Star, Sky, Exhausted } what = What::Exhausted;
     State y{};
+    // Optically thin emission picked up on the way, in W m^-2 sr^-1 Hz^-1 at
+    // the jet's reference frequency:  Integral j_nu0 g^(2+alpha) dlambda.
+    double jet = 0.0;
 };
+
+// Four-point Gauss-Legendre nodes and weights on [0, 1].  The jet emissivity
+// is smooth by construction (soft ends, Gaussian transverse profile), so four
+// samples per accepted step resolve it without banding.
+constexpr double kGLx[4] = {0.06943184420297371, 0.33000947820757187,
+                            0.66999052179242813, 0.93056815579702629};
+constexpr double kGLw[4] = {0.17392742256872693, 0.32607257743127307,
+                            0.32607257743127307, 0.17392742256872693};
+
+// Shortest distance from the origin to the segment p0 -> p1.  Used to skip the
+// volumetric sampling entirely for the great majority of steps, which never go
+// anywhere near the jet.
+double segment_distance_to_origin(const double p0[3], const double p1[3]) {
+    const double d[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]};
+    const double dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    double t = 0.0;
+    if (dd > 0.0) t = std::clamp(-(p0[0] * d[0] + p0[1] * d[1] + p0[2] * d[2]) / dd, 0.0, 1.0);
+    const double q[3] = {p0[0] + t * d[0], p0[1] + t * d[1], p0[2] + t * d[2]};
+    return std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]);
+}
 
 } // namespace
 
@@ -68,6 +91,36 @@ static Hit trace(const RenderConfig& cfg, const NovikovThorneDisc* disc,
     double p0[3];
     bl_to_cartesian(a, y[Y_R], y[Y_TH], y[Y_PH], p0);
 
+    // -----------------------------------------------------------------------
+    // Volumetric emission.  The jet is optically thin, so unlike the disc or a
+    // stellar surface it does not stop the ray: its light is *added* to
+    // whatever the ray eventually finds behind it.  The transfer integral
+    //
+    //     I_nu(obs) / (nu_obs/nu_0)^-alpha  =  Integral j_nu0 g^(2+alpha) dlambda
+    //
+    // is accumulated with four-point Gauss-Legendre quadrature on each accepted
+    // step, evaluated on the dense-output polynomial so the samples lie on the
+    // true geodesic rather than on a chord.  `s_end` truncates the step at an
+    // occluding surface, so a jet behind the disc is correctly hidden by it.
+    // -----------------------------------------------------------------------
+    const Jet& jet = cfg.jet;
+    auto sample_jet = [&](const DenseSegment& dense, double h_step, double s_end) {
+        if (!jet.enabled || s_end <= 0.0) return;
+        double sum = 0.0;
+        for (int q = 0; q < 4; ++q) {
+            const State ys = dense.eval(kGLx[q] * s_end);
+            double z, rho;
+            Jet::cylindrical(a, ys[Y_R], ys[Y_TH], z, rho);
+            const double sh = jet.shape(z, rho);
+            if (sh <= 0.0) continue;
+            const Geom gg = geom_at(a, ys[Y_R], ys[Y_TH]);
+            const double gf = redshift_factor(ys, jet.four_velocity(gg));
+            if (gf <= 0.0) continue;
+            sum += kGLw[q] * sh * jet.boost(gf);
+        }
+        hit.jet += jet.j_nu0 * sum * h_step * s_end;
+    };
+
     for (int step = 0; step < cfg.max_steps; ++step) {
         State ynew{};
         DenseSegment dense;
@@ -91,6 +144,13 @@ static Hit trace(const RenderConfig& cfg, const NovikovThorneDisc* disc,
                 std::max(local.max_carter_drift, std::fabs(iv.Q - iv0.Q) / Q0);
         }
 
+        double p1[3];
+        bl_to_cartesian(a, ynew[Y_R], ynew[Y_TH], ynew[Y_PH], p1);
+
+        // Most steps are nowhere near the jet; one distance test skips them.
+        const bool near_jet =
+            jet.enabled && segment_distance_to_origin(p0, p1) < jet.r_bound;
+
         // --- event: the neutron star surface ----------------------------------
         // There is no horizon to fall through: light stops here.  The surface
         // is a sphere of constant Schwarzschild r, so the crossing is found by
@@ -101,20 +161,20 @@ static Hit trace(const RenderConfig& cfg, const NovikovThorneDisc* disc,
                 const double mid = 0.5 * (lo + hi);
                 if (dense.eval(mid)[Y_R] <= cfg.star.R) hi = mid; else lo = mid;
             }
+            const double s_end = 0.5 * (lo + hi);
+            if (near_jet) sample_jet(dense, dense.h, s_end);
             hit.what = Hit::What::Star;
-            hit.y = dense.eval(0.5 * (lo + hi));
+            hit.y = dense.eval(s_end);
             return hit;
         }
 
         // --- event: swallowed by the hole -------------------------------------
         if (ynew[Y_R] <= r_stop) {
+            if (near_jet) sample_jet(dense, dense.h, 1.0);
             hit.what = Hit::What::Horizon;
             hit.y = ynew;
             return hit;
         }
-
-        double p1[3];
-        bl_to_cartesian(a, ynew[Y_R], ynew[Y_TH], ynew[Y_PH], p1);
 
         // --- event: equatorial plane crossing (the disc) ----------------------
         if (disc) {
@@ -127,8 +187,10 @@ static Hit trace(const RenderConfig& cfg, const NovikovThorneDisc* disc,
                     const double cm = std::cos(dense.eval(mid)[Y_TH]);
                     if (cm * c0 <= 0.0) hi = mid; else lo = mid;
                 }
-                const State yc = dense.eval(0.5 * (lo + hi));
+                const double s_end = 0.5 * (lo + hi);
+                const State yc = dense.eval(s_end);
                 if (disc->contains(yc[Y_R])) {
+                    if (near_jet) sample_jet(dense, dense.h, s_end);
                     hit.what = Hit::What::Disc;
                     hit.y = yc;
                     return hit;
@@ -167,14 +229,19 @@ static Hit trace(const RenderConfig& cfg, const NovikovThorneDisc* disc,
                             const double mid = 0.5 * (lo + hi2);
                             if (f(mid) <= 0.0) hi2 = mid; else lo = mid;
                         }
+                        const double s_end = 0.5 * (lo + hi2);
+                        if (near_jet) sample_jet(dense, dense.h, s_end);
                         hit.what = Hit::What::Sun;
-                        hit.y = dense.eval(0.5 * (lo + hi2));
+                        hit.y = dense.eval(s_end);
                         return hit;
                     }
                     prev_s = s;
                 }
             }
         }
+
+        // Nothing stopped the ray inside this step, so the whole of it counts.
+        if (near_jet) sample_jet(dense, dense.h, 1.0);
 
         // --- event: escape to the sky ----------------------------------------
         if (ynew[Y_R] > cfg.r_escape) {
@@ -195,9 +262,9 @@ static Hit trace(const RenderConfig& cfg, const NovikovThorneDisc* disc,
 // ---------------------------------------------------------------------------
 // Turn a hit into radiance.
 // ---------------------------------------------------------------------------
-static spec::XYZ shade(const RenderConfig& cfg, const NovikovThorneDisc* disc,
-                       const StarField* stars, const Hit& hit, double psf_sigma,
-                       RenderStats& local) {
+static spec::XYZ shade_hit(const RenderConfig& cfg, const NovikovThorneDisc* disc,
+                           const StarField* stars, const Hit& hit, double psf_sigma,
+                           RenderStats& local) {
     const double a = cfg.spin;
 
     switch (hit.what) {
@@ -307,6 +374,24 @@ static spec::XYZ shade(const RenderConfig& cfg, const NovikovThorneDisc* disc,
     }
 }
 
+// Whatever the ray ended on, add the optically thin jet emission it collected
+// on the way there.  `jet_colour` is the CIE colour of a unit-amplitude
+// synchrotron power law: the spectrum is scale-free under Doppler and
+// gravitational shifts, so the whole jet is one colour and only the amplitude
+// carries the relativistic physics.
+static spec::XYZ shade(const RenderConfig& cfg, const NovikovThorneDisc* disc,
+                       const StarField* stars, const Hit& hit, double psf_sigma,
+                       const spec::XYZ& jet_colour, RenderStats& local) {
+    spec::XYZ c = shade_hit(cfg, disc, stars, hit, psf_sigma, local);
+    if (hit.jet > 0.0) {
+        ++local.jet_rays;
+        c.x += jet_colour.x * hit.jet;
+        c.y += jet_colour.y * hit.jet;
+        c.z += jet_colour.z * hit.jet;
+    }
+    return c;
+}
+
 // ---------------------------------------------------------------------------
 img::Image render(const RenderConfig& cfg, RenderStats& stats) {
     const auto t_start = std::chrono::steady_clock::now();
@@ -328,6 +413,9 @@ img::Image render(const RenderConfig& cfg, RenderStats& stats) {
     // Angular size of one pixel, used as the star point-spread width.
     const double px_ang = cfg.cam.fov / cfg.width;
     const double psf_sigma = 0.55 * px_ang;
+
+    const spec::XYZ jet_colour = cfg.jet.enabled ? spec::powerlaw_xyz(cfg.jet.alpha)
+                                                 : spec::XYZ{};
 
     int nthreads = cfg.threads > 0 ? cfg.threads
                                    : static_cast<int>(std::thread::hardware_concurrency());
@@ -365,7 +453,7 @@ img::Image render(const RenderConfig& cfg, RenderStats& stats) {
                         ++local.rays;
                         const Hit hit = trace(cfg, disc.get(), dir, tet, local);
                         const spec::XYZ c = shade(cfg, disc.get(), stars.get(), hit,
-                                                  psf_sigma, local);
+                                                  psf_sigma, jet_colour, local);
                         acc.x += c.x; acc.y += c.y; acc.z += c.z;
                     }
                 }
@@ -397,6 +485,7 @@ img::Image render(const RenderConfig& cfg, RenderStats& stats) {
         stats.disc_hits += s.disc_hits;
         stats.sun_hits += s.sun_hits;
         stats.star_hits += s.star_hits;
+        stats.jet_rays += s.jet_rays;
         stats.total_flux += s.total_flux;
         stats.escaped += s.escaped;
         stats.exhausted += s.exhausted;

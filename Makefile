@@ -1,7 +1,7 @@
 # Plain make build, for when cmake is not around.
 #   make          build
 #   make test     build and run the physics validation suite
-#   make images   render the 20 stills in gallery/ (slow: ~3 h, 8 are 4K)
+#   make images   render the stills in gallery/ (slow: ~4 h, several are 4K)
 #   make stars    render the neutron star stills in gallery/
 #   make videos   render the sample films in video/ (slow: ~30 min)
 
@@ -21,11 +21,11 @@ $(BIN): $(OBJ)
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-src/main.o:     src/render.h src/disc.h src/scene.h src/image.h src/kerr.h src/geodesic.h src/constants.h
-src/render.o:   src/render.h src/disc.h src/scene.h src/image.h src/kerr.h src/geodesic.h src/spectrum.h
+src/main.o:     src/render.h src/jet.h src/disc.h src/scene.h src/image.h src/kerr.h src/geodesic.h src/constants.h
+src/render.o:   src/render.h src/jet.h src/disc.h src/scene.h src/image.h src/kerr.h src/geodesic.h src/spectrum.h
 src/spectrum.o: src/spectrum.h src/constants.h
 src/image.o:    src/image.h src/spectrum.h
-src/validate.o: src/kerr.h src/geodesic.h src/disc.h src/spectrum.h src/constants.h
+src/validate.o: src/kerr.h src/jet.h src/geodesic.h src/disc.h src/spectrum.h src/constants.h
 
 test: $(BIN)
 	./$(BIN) --test
@@ -72,10 +72,20 @@ images: $(BIN)
 	./$(BIN) --preset stellar --sun --width 1600 --height 900 --spp 2 \
 		--out gallery/sun-vs-stellar.png
 	./$(BIN) --preset quasar --width 3840 --height 2160 --spp 2 --out gallery/quasar.png
+# The full length of the jets, with the Milky Way behind them.
+	./$(BIN) --preset quasar --distance 150 --fov 75 --jet-length 220 \
+		--width 3840 --height 2160 --spp 2 --out gallery/quasar-jets.png
+# Seen from 45 degrees the approaching jet is beamed towards us and the
+# receding one away: the classic one-sided jet, produced by the ray tracer
+# rather than drawn in.
+	./$(BIN) --preset quasar --inclination 45 --fov 55 \
+		--width 1920 --height 1440 --spp 2 --out gallery/quasar-beamed.png
+	./$(BIN) --preset quasar --inclination 60 --fov 55 \
+		--width 1920 --height 1440 --spp 2 --out gallery/quasar-face.png
+# Same hole, same accretion rate, no spin - and therefore no jet at all, since
+# Blandford-Znajek has nothing to extract.  The honest control image.
 	./$(BIN) --preset quasar --spin 0.0 --width 1920 --height 1080 --spp 2 \
 		--out gallery/quasar-spin0.png
-	./$(BIN) --preset quasar --inclination 30 --fov 40 \
-		--width 1920 --height 1080 --spp 2 --out gallery/quasar-face.png
 
 # Neutron stars.  Mass and radius come from a TOV solve of the chosen equation
 # of state, so the only inputs are the physics.

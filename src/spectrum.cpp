@@ -72,6 +72,25 @@ XYZ blackbody_xyz_exact(double T) {
     return out;
 }
 
+XYZ cie_cmf(double nm) { return {cie_x(nm), cie_y(nm), cie_z(nm)}; }
+
+XYZ powerlaw_xyz(double alpha) {
+    // I_nu = A (nu/nu_0)^-alpha  ->  I_lambda = I_nu c / lambda^2
+    //                                        = A c (lambda/lambda_0)^alpha / lambda^2
+    constexpr double lambda_0 = 550e-9;
+    XYZ out;
+    constexpr double lo = 360.0, hi = 830.0, dl = 1.0;
+    for (double nm = lo; nm <= hi; nm += dl) {
+        const double lam = nm * 1e-9;
+        const double I_l = c * std::pow(lam / lambda_0, alpha) / (lam * lam);
+        const double w = I_l * dl * 1e-9;
+        out.x += w * cie_x(nm);
+        out.y += w * cie_y(nm);
+        out.z += w * cie_z(nm);
+    }
+    return out;
+}
+
 // --- log-log lookup table --------------------------------------------------
 namespace {
 

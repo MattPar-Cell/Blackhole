@@ -4,6 +4,7 @@
 #include "disc.h"
 #include "scene.h"
 #include "neutronstar.h"
+#include "jet.h"
 #include "image.h"
 
 #include <memory>
@@ -33,6 +34,7 @@ struct RenderConfig {
     SunBody sun;
     HotSpot hotspot;
     NeutronStar star;
+    Jet jet;
 
     // Observer coordinate time of this frame, in GM/c^3.  Only matters when
     // something in the scene is time-dependent; a bare Novikov-Thorne disc is
@@ -57,6 +59,7 @@ struct RenderStats {
     long long disc_hits = 0;
     long long sun_hits = 0;
     long long star_hits = 0;
+    long long jet_rays = 0;            // rays that picked up any jet emission
     long long escaped = 0;
     long long exhausted = 0;
     double max_norm_error = 0.0;       // worst |g^{ab} p_a p_b| along any ray

@@ -43,6 +43,24 @@ XYZ blackbody_xyz(double T);
 // Total bolometric radiance of a blackbody, sigma T^4 / pi  (W m^-2 sr^-1).
 double blackbody_bolometric(double T);
 
+// Colour of an optically thin synchrotron power law  I_nu = A (nu/nu_0)^-alpha,
+// for A = 1 W m^-2 sr^-1 Hz^-1 at nu_0 = c/550nm.  In wavelength this is
+// I_lambda ~ lambda^(alpha-2), so any alpha > -2 rises towards the blue: the
+// optical synchrotron jets of M87 and 3C 273 really are blue.
+//
+// The result is exactly proportional to A, and - crucially - it does not
+// depend on the Doppler or gravitational shift at all.  A power law that is
+// shifted in frequency is the same power law with a different amplitude, so
+// the renderer can factor the jet's colour out of the transfer integral
+// entirely and boost only the brightness.  Units: (W m^-2 sr^-1) per
+// (W m^-2 sr^-1 Hz^-1), i.e. hertz.
+XYZ powerlaw_xyz(double alpha);
+
+// The CIE 1931 2-degree colour matching functions themselves, at a wavelength
+// in nanometres.  Exposed so the validation suite can re-integrate any spectrum
+// independently of the routines above.
+XYZ cie_cmf(double nm);
+
 // CIE XYZ (D65) -> linear sRGB primaries.  May produce out-of-gamut negatives.
 RGB xyz_to_linear_srgb(const XYZ& c);
 

@@ -152,12 +152,24 @@ std::vector<uint8_t> develop(const Image& im, double exposure, ToneMap tm,
                 // log term underneath it, so a 10^6 K neutron star and a sixth
                 // magnitude star can share a frame.  It is a display transform
                 // and nothing more - the radiance behind it is untouched.
+                //
+                // The lift is *saturating*.  A plain proportional blend, w * l,
+                // rises almost linearly in log radiance, which meant everything
+                // between two and eleven decades down landed within 0.1 of the
+                // same grey: fine for a point-like subject on an empty sky,
+                // useless for an extended one such as a jet, which turned into a
+                // flat wash.  Passing the blend through a tanh saturates it at
+                // `cap`, so the shadow floor stays lifted just enough to see the
+                // night sky while the ACES term keeps its full contrast over the
+                // top few decades, where the interesting structure is.
+                constexpr double cap = 0.12, w = 0.5;
                 const double denom = std::log10(1.0 + log_k);
                 for (double& x : v) {
                     const double f = aces(x);
                     const double l = std::clamp(
                         std::log10(1.0 + log_k * std::max(x, 0.0)) / denom, 0.0, 1.0);
-                    x = std::clamp(f + 0.35 * l * (1.0 - f), 0.0, 1.0);
+                    const double lift = cap * std::tanh(w * l / cap);
+                    x = std::clamp(f + lift * (1.0 - f), 0.0, 1.0);
                 }
                 break;
             }
