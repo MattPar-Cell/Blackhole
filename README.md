@@ -238,10 +238,117 @@ way to $a = 1$ the figure would be $1 - 1/\sqrt3 = 42\%$.
 
 ![Face on](gallery/quasar-face.png)
 
-*The same quasar at 30° from the spin axis — much closer to how a broad-line
-quasar is actually oriented, since we have to be looking inside the opening of
-the obscuring torus to see one at all. The frame above is more edge-on than
-that, chosen because it is the geometry where spin shows.*
+*The same quasar at 60° from the spin axis — closer to how a broad-line quasar
+is actually oriented, since we have to be looking inside the opening of the
+obscuring torus to see one at all. The frame above is more edge-on than that,
+chosen because it is the geometry where spin shows.*
+
+### The jets
+
+![Jets](gallery/quasar-jets.png)
+
+A quasar's jets are **not** powered by the accretion disc. They are powered by
+the rotation of the hole itself.
+
+Magnetic field lines threaded through the horizon by the accretion flow are
+dragged round with it. A rotating horizon behaves like a resistive membrane, so
+the twist propagates outwards as a Poynting flux, and the energy it carries comes
+out of the hole's spin. Blandford and Znajek worked this out in 1977; the modern
+form, calibrated against GRMHD simulations of the magnetically arrested state
+(Tchekhovskoy, Narayan & McKinney 2011), is
+
+$$\frac{P}{\dot M c^2} \;=\; \frac{\kappa}{4\pi}\,\phi^2\,\Omega_H^2\left(1 + 1.38\,\Omega_H^2 - 9.2\,\Omega_H^4\right)$$
+
+with $\kappa = 0.053$ and $\phi \approx 50$ the saturated horizon flux. For the
+`quasar` preset the program prints:
+
+```
+  Jets (Blandford-Znajek)
+  horizon flux phi     50   (50 = magnetically arrested)
+  jet power            3.9002e+40 W  =  1.019e+14 L_sun
+  as a fraction of     Mdot c^2  x 1.9918   <- more than the accreted matter
+                       brings in.  The surplus is the hole's own
+                       rotational energy, so this jet spins it down
+  disc luminosity      6.2855e+39 W   (jet / disc = 6.21)
+  bulk Lorentz factor  2.34 at the base -> 10.00 asymptotically
+  field-line rotation  Omega_F = 0.2347 c^3/GM  = Omega_H / 2
+  light cylinder       4.26 GM/c^2
+```
+
+**The jet carries away twice the energy the accreting matter brings in.** That
+is not a bookkeeping error. $\Omega_H^2$ is the whole story: set the spin to
+zero and the power is exactly zero, because there is no rotational energy to
+tap. `gallery/quasar-spin0.png` is that control image — same mass, same
+accretion rate, no spin, and no jet anywhere in the frame.
+
+#### Optically thin transfer
+
+The disc stops a ray. A jet does not: it is optically thin, so its light is
+*added* to whatever the ray finds behind it. Two Lorentz invariants,
+$I_\nu/\nu^3$ and $j_\nu/\nu^2$, turn the transfer equation into
+
+$$\frac{d}{d\lambda}\left(\frac{I_\nu}{\nu^3}\right) = \frac{j_\nu}{\nu^2}$$
+
+and for a power-law synchrotron source $j_\nu = j_0(\nu/\nu_0)^{-\alpha}$, with
+the affine parameter normalised so the camera measures unit photon energy, that
+integrates to
+
+$$I_\nu(\text{obs}) \;=\; \left(\frac{\nu_{\rm obs}}{\nu_0}\right)^{-\alpha}\int j_0\, g^{\,2+\alpha}\, d\lambda .$$
+
+The ray tracer evaluates that integral with four-point Gauss–Legendre quadrature
+on the dense-output polynomial of every accepted step, truncated wherever a
+surface gets in the way — so the disc correctly eclipses the jet behind it.
+
+Two things fall out. A shifted power law is the same power law, so the jet has
+one fixed colour and only its brightness varies; $I_\lambda \propto
+\lambda^{\alpha - 2}$ means that colour is blue, which is why M87's and 3C 273's
+optical jets really are blue. And all of the relativistic physics sits in the
+single scalar $g^{2+\alpha}$, where $g$ is computed from the traced null momentum
+contracted with the plasma four-velocity — the same machinery that shades the
+disc.
+
+#### The one-sided jet is a result, not an input
+
+| | |
+|---|---|
+| ![Beamed](gallery/quasar-beamed.png) | ![M87](gallery/m87.png) |
+| **45° from the axis.** The upper jet is approaching and beamed towards us; the lower one is receding and beamed away. | **M87 at 17°**, the archetype and the object the collimation law here was measured on. Nearly pointed at us, so the counter-jet all but disappears. |
+
+Nothing tells the renderer to draw one jet brighter than the other. Both are
+identical in the plasma's own frame. The asymmetry is entirely
+$\delta^{\,2+\alpha}$ with $\delta = 1/\Gamma(1-\beta\cos\theta)$, and the
+validation suite checks that the renderer's $g$ reduces to exactly that formula
+in the far field, to 7 × 10⁻¹⁶. At $\Gamma = 10$ the predicted jet /
+counter-jet ratio is 9.5 × 10³ at 20° and only 1.8 at 84° — which is why a
+quasar seen side-on shows two jets and a blazar shows one.
+
+#### What is prescribed
+
+A ray tracer cannot derive a jet's structure from the metric; that needs a GRMHD
+simulation, which is a different program. So the geometry, velocity field and
+emissivity profile are prescribed — but each from a measurement or a
+conservation law, not from taste:
+
+| quantity | value | where it comes from |
+|---|---|---|
+| collimation | $R \propto z^{0.58}$ | VLBI of M87 from 10 to 10⁵ $GM/c^2$ (Asada & Nakamura 2012). A *parabola*, not the cone a ballistic outflow would make |
+| acceleration | $\Gamma \propto R$, saturating | magnetic acceleration theory (Komissarov et al. 2007), measured along M87 (Park et al. 2019) |
+| emissivity | $j \propto \Gamma^{-(2+\alpha)}R^{-(3+\alpha)}$ | mass conservation $n\propto 1/\Gamma R^2$, flux freezing $B'\propto 1/\Gamma R$, and $j_\nu \propto n B'^{1+\alpha}$ |
+| re-acceleration | $\times\, z^{\zeta}$, $\zeta = 2$ | the one fitted number. $\zeta = 0$ fades the jet by six orders of magnitude over the length drawn here, which is ruled out by jets staying visible to 10⁵ $GM/c^2$ |
+| transverse profile | limb-brightened sheath | resolved in M87 (Kim et al. 2018) |
+| field rotation | $\Omega_F = \Omega_H/2$ | the Blandford–Znajek solution itself |
+| radiated fraction | 2% of $P$ | AGN jets are poor radiators; most of the power stays kinetic until the lobes |
+
+The plasma four-velocity is built on the **ZAMO tetrad** rather than a static
+frame, because the jet is launched from inside the ergosphere where no static
+observer exists. It comes out normalised to $|u\cdot u + 1| < 3\times10^{-13}$
+even at $r = 1.1\,GM/c^2$ with $a = 0.998$.
+
+Not modelled: synchrotron self-absorption. The compact base of a real jet is
+optically thick at low frequencies, which is what produces the "core shift"
+seen in VLBI. Here the base is left transparent, so it renders as a very bright
+unresolved core — which, as it happens, is what dominates almost every real VLBI
+image of a jet anyway, but for a different reason.
 
 ### The inner disc, in motion
 
@@ -580,6 +687,10 @@ checked against Einstein's $4GM/c^2b$:
 | $\int B_\lambda\,d\lambda = \sigma T^4/\pi$ | 3.2e-11 |
 | Wien's displacement law | 2.5e-05 |
 | Doppler factor → $1/\gamma(1\mp v)$ far out | 3.2e-05 |
+| jet plasma four-velocity normalised, inside the ergosphere | 2.8e-13 |
+| jet redshift factor → $1/\Gamma(1-\beta\cos\theta)$ far out | 7.2e-16 |
+| Blandford–Znajek power $\propto \Omega_H^2$ at small spin | 7.0e-04 |
+| jet emitted power vs the Blandford–Znajek budget | exact to 6 figures |
 | Sgr A* shadow vs EHT (51.8 ± 2.3 µas) | predicts 53.3 µas |
 | M87* shadow vs EHT (42 ± 3 µas) | predicts 39.7 µas |
 
@@ -594,7 +705,7 @@ Every render also reports its own accuracy:
 
 ## Gallery
 
-All rendered by the code in this repository. The eight flagship frames are
+All rendered by the code in this repository. The flagship frames are
 **3840 × 2160**; the comparison strips stay at 1280 × 720 because they are shown
 as thumbnails, and the two star-field frames stay at 1920 × 1080 because a sky
 full of isolated bright pixels is high-entropy and quadruples in file size
@@ -609,7 +720,7 @@ well as larger, at about half the cost of 4K with 9 samples.
 | | |
 |---|---|
 | ![TON 618](gallery/ton618.png) | ![M87](gallery/m87.png) |
-| **TON 618** — 6.6 × 10¹⁰ M☉, the largest here by far. Its shadow is **0.107 light-years** across: 6 770 AU, or 113 times the width of Neptune's orbit. At 45° from the spin axis, about the most edge-on view still consistent with seeing it as a broad-line quasar at all. | **M87\***, 17° from the spin axis. Nearly face-on, so the Doppler asymmetry is weak and the ring is almost round. The orange is a computed colour, not a palette: a few-thousand-kelvin disc. |
+| **TON 618** — 6.6 × 10¹⁰ M☉, the largest here by far. Its shadow is **0.107 light-years** across: 6 770 AU, or 113 times the width of Neptune's orbit. At 45° from the spin axis, about the most edge-on view still consistent with seeing it as a broad-line quasar at all. | **M87\***, 17° from the spin axis. Nearly face-on, so the Doppler asymmetry is weak and the ring is almost round, and the jet — the first one ever discovered, in 1918 — points close enough to us that its approaching side is beamed bright and the counter-jet nearly vanishes. The orange is a computed colour, not a palette: a few-thousand-kelvin disc. |
 | ![Sgr A*](gallery/sgra.png) | ![stellar](gallery/stellar.png) |
 | **Sagittarius A\***, 8° from edge-on. The left side is brighter because it is approaching — at the inner disc the beaming contrast is about 8:1. | **Stellar-mass X-ray binary**, 10 M☉ at 0.1 Eddington. The disc peaks at 7 × 10⁶ K, so its output is X-ray and only the blue Rayleigh–Jeans tail is visible. |
 
@@ -680,6 +791,15 @@ DISC
   --eddington F        accretion rate as a fraction of the Eddington rate
   --retrograde         disc counter-rotates with respect to the hole
 
+JETS
+  --jets               add Blandford-Znajek plasma jets along the spin axis
+  --no-jets            switch them off (they are on for quasar and m87)
+  --jet-length Z       how far the jets are drawn, in GM/c^2 (default 130)
+  --jet-gamma G        terminal bulk Lorentz factor (default 10)
+  --jet-alpha A        synchrotron spectral index, S_nu ~ nu^-A (default 0.7)
+  --jet-efficiency F   fraction of the jet power that is radiated (default 0.02)
+  --jet-flux PHI       dimensionless magnetic flux on the horizon (default 50)
+
 THE SUN
   --sun                add the Sun at the same distance as the black hole
   --sun-distance R     place the Sun this far from the hole instead
@@ -734,6 +854,12 @@ Some things worth trying:
 
 # TON 618, one of the most massive black holes known
 ./blackhole --preset ton618
+
+# the full length of the jets, from further back
+./blackhole --preset quasar --distance 150 --fov 75 --jet-length 220
+
+# the same hole with the spin turned off - and therefore no jet at all
+./blackhole --preset quasar --spin 0
 ```
 
 A note on `--glare`: it is a camera model, a convolution with a heavy-tailed
@@ -788,11 +914,17 @@ colorimetry; solar limb darkening.
   EHT observation. The *shadow size* is a pure geometry result and does match.
 - Limb darkening is grey (wavelength-independent).
 - The plunging region inside the ISCO is treated as transparent.
+- The jets' *power* and *beaming* are computed; their geometry, velocity field
+  and emissivity profile are prescribed from measurements and conservation
+  laws. One parameter — the re-acceleration index — is fitted rather than
+  derived.
 
 **Not modelled.** Radiative transfer through the disc or any intervening
 medium — the spacetime is vacuum, so rays travel unabsorbed and unscattered
-until they hit something. No jets, no corona, no magnetic fields, no
-self-gravity of the disc, no time dependence. The Sun's own mass does not curve
+until they hit something. No corona, no self-gravity of the disc, no MHD: the
+jets are transported exactly but their structure is prescribed (see
+[The jets](#the-jets)), and there is no synchrotron self-absorption, so the jet
+base is transparent where a real one would be opaque. The Sun's own mass does not curve
 spacetime here; light passing its limb would be deflected by 1.75″, which is
 negligible at every scale in these images. No cosmological expansion.
 
@@ -805,11 +937,12 @@ negligible at every scale in these images. No cosmological expansion.
 | `src/kerr.h` | the metric, its inverse, analytic derivatives, horizons, ISCO, ZAMO tetrad |
 | `src/geodesic.h` | Hamiltonian geodesic equations, Dormand–Prince 5(4) with dense output |
 | `src/disc.h` | Novikov–Thorne / Page–Thorne accretion disc |
+| `src/jet.h` | Blandford–Znajek jet power, collimation, plasma four-velocity, emissivity |
 | `src/spectrum.h/.cpp` | Planck radiance → CIE 1931 → sRGB |
 | `src/scene.h` | star field, the Sun, orbiting hot spot, camera |
 | `src/render.cpp` | backwards ray tracing, event detection, shading |
 | `src/image.h/.cpp` | tone mapping, the PNG encoder, and the APNG writer |
-| `src/validate.cpp` | the 40 physics checks |
+| `src/validate.cpp` | the 78 physics checks |
 | `gallery/` | rendered stills (`make images`) |
 | `video/` | rendered films (`make videos`) |
 
@@ -821,5 +954,9 @@ negligible at every scale in these images. No cosmological expansion.
 - Novikov & Thorne (1973); Page & Thorne, *ApJ* **191**, 499 (1974) — thin discs
 - Luminet, *A&A* **75**, 228 (1979) — the first rendering of a lensed disc
 - Hairer, Nørsett & Wanner, *Solving ODEs I* — the integrator and its dense output
+- Blandford & Znajek, *MNRAS* **179**, 433 (1977) — extracting energy from a spinning hole
+- Tchekhovskoy, Narayan & McKinney, *MNRAS* **418**, L79 (2011) — jet power in the MAD state
+- Asada & Nakamura, *ApJ* **745**, L28 (2012) — M87's parabolic jet
+- Komissarov et al., *MNRAS* **380**, 51 (2007) — magnetic acceleration and collimation
 - Wyman, Sloan & Shirley, *JCGT* **2**(2) (2013) — CIE colour matching fits
 - Event Horizon Telescope Collaboration (2019, 2022) — M87\* and Sgr A\*
