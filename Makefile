@@ -127,7 +127,7 @@ videos: $(BIN)
 # the scene changes: the jets are identical in their own rest frame throughout.
 # Everything you see happen is Doppler beaming turning off.
 	./$(BIN) --preset quasar --inclination 8 --inclination-to 90 --fov 62 \
-		--duration 10 --fps 15 --width 420 --height 315 --spp 1 \
+		--duration 10 --fps 12 --width 340 --height 255 --spp 1 \
 		--out video/quasar-jet-sweep.apng
 
 clean:
